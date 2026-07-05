@@ -14,51 +14,99 @@ module ntt_core_top (
     output wire done
 );
 
-    localparam ST_WAIT_AGU = 2'd0;
-    localparam ST_FIRE = 2'd1;
-    localparam ST_WAIT_BF = 2'd2;
-    localparam ST_WRITE_B = 2'd3;
-
-    reg [1:0] pstate;
-    reg advance_r;
-    reg bf_valid_in;
-
-    reg mem_we;
-    reg [7:0] mem_wr_addr;
-    reg [11:0] mem_wr_data;
+    localparam AFIFO_DEPTH = 16;
 
     wire [1:0] fstate;
-    wire f_busy, f_done;
+    wire f_busy;
+    wire f_done;
     wire [7:0] len;
     wire [7:0] pos;
     wire [7:0] zidx;
     wire [7:0] cnt;
-    wire is_scale;
+    wire is_scale_now;
 
     wire [7:0] addr_a;
     wire [7:0] addr_b;
-
     wire [11:0] zeta_d;
 
     wire [11:0] bf_out0;
     wire [11:0] bf_out1;
     wire bf_valid_out;
+    reg bf_valid_in;
 
-    wire ram_we;
-    wire [7:0] ram_addr_wr;
-    wire [7:0] ram_addr_rd;
-    wire [11:0] ram_din;
     wire [11:0] mem_dout0;
     wire [11:0] mem_dout1;
+    wire mem_we0;
+    wire mem_we1;
+    wire [7:0] mem_wr_addr0;
+    wire [7:0] mem_wr_addr1;
+    wire [11:0] mem_wr_data0;
+    wire [11:0] mem_wr_data1;
 
-    assign busy = f_busy;
-    assign done = f_done;
-    assign ram_we = f_busy ? mem_we : ext_we;
-    assign ram_addr_wr = f_busy ? mem_wr_addr : ext_addr;
-    assign ram_addr_rd = f_busy ? addr_a : ext_addr;
-    assign ram_din = f_busy ? mem_wr_data : ext_din;
+    wire ram_we0;
+    wire ram_we1;
+    wire [7:0] ram_addr_wr0;
+    wire [7:0] ram_addr_wr1;
+    wire [7:0] ram_addr_rd0;
+    wire [7:0] ram_addr_rd1;
+    wire [11:0] ram_din0;
+    wire [11:0] ram_din1;
+
+    reg advance_r;
+    reg [7:0] zidx_d1;
+    reg is_scale_d1;
+    reg [7:0] done_delay;
+
+    wire actual_done;
+    wire actual_busy;
+
+    reg [7:0] afifo_a [0:AFIFO_DEPTH-1];
+    reg [7:0] afifo_b [0:AFIFO_DEPTH-1];
+    reg afifo_scale [0:AFIFO_DEPTH-1];
+    reg [3:0] afifo_wptr;
+    reg [3:0] afifo_rptr;
+
+    wire [7:0] wb_addr_a;
+    wire [7:0] wb_addr_b;
+    wire wb_scale;
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            zidx_d1 <= 8'd0;
+            is_scale_d1 <= 1'b0;
+        end else begin
+            zidx_d1 <= zidx;
+            is_scale_d1 <= is_scale_now;
+        end
+    end
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            done_delay <= 8'd0;
+        end else begin
+            done_delay <= {done_delay[6:0], f_done};
+        end
+    end
+
+    assign actual_done = done_delay[7];
+    assign actual_busy = f_busy || f_done || |done_delay;
+
+    assign busy = actual_busy;
+    assign done = actual_done;
+
+    assign ram_we0 = actual_busy ? mem_we0 : ext_we;
+    assign ram_addr_wr0 = actual_busy ? mem_wr_addr0 : ext_addr;
+    assign ram_din0 = actual_busy ? mem_wr_data0 : ext_din;
+
+    assign ram_we1 = actual_busy ? mem_we1 : 1'b0;
+    assign ram_addr_wr1 = actual_busy ? mem_wr_addr1 : 8'd0;
+    assign ram_din1 = actual_busy ? mem_wr_data1 : 12'd0;
+
+    assign ram_addr_rd0 = actual_busy ? addr_a : ext_addr;
+    assign ram_addr_rd1 = actual_busy ? addr_b : 8'd0;
+
     assign ext_dout = mem_dout0;
-    assign is_scale = (fstate == 2'd2);
+    assign is_scale_now = (fstate == 2'd2);
 
     ntt_controller u_controller (
         .clk(clk),
@@ -91,17 +139,20 @@ module ntt_core_top (
         .ADDR_WIDTH(8)
     ) u_mem (
         .clk(clk),
-        .we(ram_we),
-        .addr_wr(ram_addr_wr),
-        .addr_rd0(ram_addr_rd),
-        .addr_rd1(addr_b),
-        .din(ram_din),
+        .we0(ram_we0),
+        .addr_wr0(ram_addr_wr0),
+        .din0(ram_din0),
+        .we1(ram_we1),
+        .addr_wr1(ram_addr_wr1),
+        .din1(ram_din1),
+        .addr_rd0(ram_addr_rd0),
+        .addr_rd1(ram_addr_rd1),
         .dout0(mem_dout0),
         .dout1(mem_dout1)
     );
 
     ntt_twiddle_rom u_rom (
-        .addr(zidx[6:0]),
+        .addr(zidx_d1[6:0]),
         .is_inv(mode),
         .d_out(zeta_d)
     );
@@ -110,7 +161,7 @@ module ntt_core_top (
         .clk(clk),
         .rst_n(rst_n),
         .mode(mode),
-        .is_scale(is_scale),
+        .is_scale(is_scale_d1),
         .a_i(mem_dout0),
         .b_i(mem_dout1),
         .zeta_i(zeta_d),
@@ -122,48 +173,46 @@ module ntt_core_top (
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            pstate <= ST_WAIT_AGU;
-            mem_we <= 1'b0;
-            mem_wr_addr <= 8'd0;
-            mem_wr_data <= 12'd0;
-            advance_r <= 1'b0;
+            afifo_wptr <= 0;
+        end else if (bf_valid_in) begin
+            afifo_a[afifo_wptr] <= addr_a;
+            afifo_b[afifo_wptr] <= addr_b;
+            afifo_scale[afifo_wptr] <= is_scale_d1;
+            afifo_wptr <= afifo_wptr + 1;
+        end
+    end
+
+    assign wb_addr_a = afifo_a[afifo_rptr];
+    assign wb_addr_b = afifo_b[afifo_rptr];
+    assign wb_scale = afifo_scale[afifo_rptr];
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            afifo_rptr <= 0;
+        end else if (bf_valid_out) begin
+            afifo_rptr <= afifo_rptr + 1;
+        end
+    end
+
+    assign mem_we0 = bf_valid_out;
+    assign mem_wr_addr0 = wb_addr_a;
+    assign mem_wr_data0 = bf_out0;
+
+    assign mem_we1 = bf_valid_out && !wb_scale;
+    assign mem_wr_addr1 = wb_addr_b;
+    assign mem_wr_data1 = bf_out1;
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
             bf_valid_in <= 1'b0;
+            advance_r <= 1'b0;
         end else begin
-            mem_we <= 1'b0;
-            advance_r <= 1'b0;
             bf_valid_in <= 1'b0;
-            case (pstate)
-                ST_WAIT_AGU: begin
-                    if (f_busy) begin
-                        pstate <= ST_FIRE;
-                    end
-                end
-                ST_FIRE: begin
-                    bf_valid_in <= 1'b1;
-                    pstate <= ST_WAIT_BF;
-                end
-                ST_WAIT_BF: begin
-                    if (bf_valid_out) begin
-                        mem_we <= 1'b1;
-                        mem_wr_addr <= addr_a;
-                        mem_wr_data <= bf_out0;
-                        if (is_scale) begin
-                            advance_r <= 1'b1;
-                            pstate <= ST_WAIT_AGU;
-                        end else begin
-                            pstate <= ST_WRITE_B;
-                        end
-                    end
-                end
-                ST_WRITE_B: begin
-                    mem_we <= 1'b1;
-                    mem_wr_addr <= addr_b;
-                    mem_wr_data <= bf_out1;
-                    advance_r <= 1'b1;
-                    pstate <= ST_WAIT_AGU;
-                end
-                default: pstate <= ST_WAIT_AGU;
-            endcase
+            advance_r <= 1'b0;
+            if (f_busy && !f_done) begin
+                bf_valid_in <= 1'b1;
+                advance_r <= 1'b1;
+            end
         end
     end
 
