@@ -153,7 +153,7 @@ module ntt_core_top (
         .addr_b(addr_b)
     );
 
-    poly_ram_dual #(
+    ntt_ram_dual #(
         .DEPTH(256),
         .ADDR_WIDTH(8)
     ) u_mem (

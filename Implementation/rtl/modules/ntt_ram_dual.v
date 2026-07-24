@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module poly_ram_dual #(
+module ntt_ram_dual #(
     parameter DEPTH = 256,
     parameter ADDR_WIDTH = 8
 )(
