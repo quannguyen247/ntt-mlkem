@@ -24,6 +24,9 @@ module ntt_core_top (
     wire [7:0] zidx;
     wire [7:0] cnt;
     wire is_scale_now;
+    wire controller_start;
+    wire advance_now;
+    wire operation_mode;
 
     wire [7:0] addr_a;
     wire [7:0] addr_b;
@@ -52,7 +55,8 @@ module ntt_core_top (
     wire [11:0] ram_din0;
     wire [11:0] ram_din1;
 
-    reg advance_r;
+    reg start_d;
+    reg mode_r;
     reg [7:0] zidx_d1;
     reg is_scale_d1;
     reg [7:0] done_delay;
@@ -69,6 +73,18 @@ module ntt_core_top (
     wire [7:0] wb_addr_a;
     wire [7:0] wb_addr_b;
     wire wb_scale;
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            start_d <= 1'b0;
+            mode_r <= 1'b0;
+        end else begin
+            start_d <= start;
+            if (controller_start) begin
+                mode_r <= mode;
+            end
+        end
+    end
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -89,7 +105,10 @@ module ntt_core_top (
     end
 
     assign actual_done = done_delay[7];
-    assign actual_busy = f_busy || f_done || |done_delay;
+    assign actual_busy = f_busy || f_done || |done_delay[6:0];
+    assign controller_start = start && !start_d && !actual_busy;
+    assign advance_now = f_busy && !f_done;
+    assign operation_mode = controller_start ? mode : mode_r;
 
     assign busy = actual_busy;
     assign done = actual_done;
@@ -111,9 +130,9 @@ module ntt_core_top (
     ntt_controller u_controller (
         .clk(clk),
         .rst_n(rst_n),
-        .start(start),
-        .mode(mode),
-        .advance(advance_r),
+        .start(controller_start),
+        .mode(operation_mode),
+        .advance(advance_now),
         .state(fstate),
         .busy(f_busy),
         .done(f_done),
@@ -153,14 +172,14 @@ module ntt_core_top (
 
     ntt_twiddle_rom u_rom (
         .addr(zidx_d1[6:0]),
-        .is_inv(mode),
+        .is_inv(operation_mode),
         .d_out(zeta_d)
     );
 
     ntt_butterfly u_bf (
         .clk(clk),
         .rst_n(rst_n),
-        .mode(mode),
+        .mode(operation_mode),
         .is_scale(is_scale_d1),
         .a_i(mem_dout0),
         .b_i(mem_dout1),
@@ -205,13 +224,10 @@ module ntt_core_top (
     always @(posedge clk) begin
         if (!rst_n) begin
             bf_valid_in <= 1'b0;
-            advance_r <= 1'b0;
         end else begin
             bf_valid_in <= 1'b0;
-            advance_r <= 1'b0;
             if (f_busy && !f_done) begin
                 bf_valid_in <= 1'b1;
-                advance_r <= 1'b1;
             end
         end
     end
