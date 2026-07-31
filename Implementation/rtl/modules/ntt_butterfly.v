@@ -21,10 +21,12 @@ module ntt_butterfly (
     reg [11:0] b_st1;
     reg [11:0] zeta_st1;
     reg valid_st1;
+    reg is_scale_st1;
 
     reg [11:0] a_st2, a_st3, a_st4, a_st5;
     reg [11:0] b_st2, b_st3, b_st4, b_st5;
     reg valid_st2, valid_st3, valid_st4, valid_st5;
+    reg is_scale_st2, is_scale_st3, is_scale_st4, is_scale_st5;
 
     wire [11:0] sub_st1;
     wire [11:0] mul_a_in;
@@ -37,7 +39,7 @@ module ntt_butterfly (
     wire [11:0] out1_comb;
 
     assign sub_st1 = ntt_mod_sub(a_st1, b_st1);
-    assign mul_a_in = is_scale ? a_st1 : (mode ? sub_st1 : b_st1);
+    assign mul_a_in = is_scale_st1 ? a_st1 : (mode ? sub_st1 : b_st1);
 
     ntt_mod_mul_12b u_mul (
         .clk(clk),
@@ -49,8 +51,8 @@ module ntt_butterfly (
     assign add_tmp = ntt_mod_add(a_st5, mod_mul_out);
     assign sub_tmp = ntt_mod_sub(a_st5, mod_mul_out);
     assign intt_add_out = ntt_mod_add(a_st5, b_st5);
-    assign out0_comb = is_scale ? mod_mul_out : (mode ? intt_add_out : add_tmp);
-    assign out1_comb = is_scale ? 12'd0 : (mode ? mod_mul_out : sub_tmp);
+    assign out0_comb = is_scale_st5 ? mod_mul_out : (mode ? intt_add_out : add_tmp);
+    assign out1_comb = is_scale_st5 ? 12'd0 : (mode ? mod_mul_out : sub_tmp);
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -58,11 +60,13 @@ module ntt_butterfly (
             b_st1 <= 12'd0;
             zeta_st1 <= 12'd0;
             valid_st1 <= 1'b0;
+            is_scale_st1 <= 1'b0;
         end else begin
             a_st1 <= a_i;
             b_st1 <= b_i;
             zeta_st1 <= zeta_i;
             valid_st1 <= valid_i;
+            is_scale_st1 <= is_scale;
         end
     end
 
@@ -71,34 +75,42 @@ module ntt_butterfly (
             a_st2 <= 12'd0;
             b_st2 <= 12'd0;
             valid_st2 <= 1'b0;
+            is_scale_st2 <= 1'b0;
 
             a_st3 <= 12'd0;
             b_st3 <= 12'd0;
             valid_st3 <= 1'b0;
+            is_scale_st3 <= 1'b0;
 
             a_st4 <= 12'd0;
             b_st4 <= 12'd0;
             valid_st4 <= 1'b0;
+            is_scale_st4 <= 1'b0;
 
             a_st5 <= 12'd0;
             b_st5 <= 12'd0;
             valid_st5 <= 1'b0;
+            is_scale_st5 <= 1'b0;
         end else begin
             a_st2 <= a_st1;
             b_st2 <= b_st1;
             valid_st2 <= valid_st1;
+            is_scale_st2 <= is_scale_st1;
 
             a_st3 <= a_st2;
             b_st3 <= b_st2;
             valid_st3 <= valid_st2;
+            is_scale_st3 <= is_scale_st2;
 
             a_st4 <= a_st3;
             b_st4 <= b_st3;
             valid_st4 <= valid_st3;
+            is_scale_st4 <= is_scale_st3;
 
             a_st5 <= a_st4;
             b_st5 <= b_st4;
             valid_st5 <= valid_st4;
+            is_scale_st5 <= is_scale_st4;
         end
     end
 
