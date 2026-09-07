@@ -13,6 +13,8 @@ Implementation/NTT.runs/
 Implementation/NTT.ioplanning/
 Implementation/NTT.srcs/
 Implementation/NTT.gen/
+# Legacy machine-local GUI project; reproducible demo sources are Tcl scripts.
+/Implementation/NTT.xpr
 
 # Simulation outputs & logs
 build/

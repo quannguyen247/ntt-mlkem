@@ -34,4 +34,6 @@ RTL/PPG thresholds were not changed in this cleanup session.
 
 VIO scripts remain a separate optional flow. Generated Validation/ workspace
 was already staged for removal from tracking; generated outputs are ignored.
-The original Implementation/NTT.xpr local edits are not part of the demo commit.
+The original Implementation/NTT.xpr was subsequently removed from tracking:
+it remains local, with a backup outside the repo. Recreate supported demo
+projects with the committed Tcl scripts; the legacy XPR is not a clone prerequisite.
