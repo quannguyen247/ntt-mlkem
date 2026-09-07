@@ -1,4 +1,0 @@
-domain_path: /mnt/c/Users/Quan/Desktop/NTT-FPGA/Validation/ntt_platform/zynqmp_fsbl/zynqmp_fsbl_bsp
-app_src_dir: C:\AMDDesignTools\2025.2.1\Vitis\data\embeddedsw\lib\sw_apps\zynqmp_fsbl
-template: zynqmp_fsbl
-lang: c

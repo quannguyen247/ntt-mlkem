@@ -38,3 +38,15 @@ __pycache__/
 
 # DFX
 dfx_runtime.txt
+
+form(donotedit)/
+Bao_cao_tien_do_TKVM/
+MAX30102/
+Validation/
+
+# Root-level tool scratch files
+/xvlog.log
+/xvlog.pb
+/*.jou
+/*.log
+/*.str
