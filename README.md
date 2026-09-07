@@ -14,6 +14,13 @@ This project is targeted for hardware implementation and physical testing on the
 
 ## Repository Structure and Usage Guidelines
 
+### KV260 sensor demo (Linux)
+
+Read [DEMO_GUIDE.md](Implementation/kv260_axi_test/DEMO_GUIDE.md) for tools,
+Vivado GUI/build steps, the one-button MAX30102 → ARM → AXI → NTT/INTT demo,
+PASS/NOT RUN criteria and AI-agent handoff. Generated projects and captured
+sensor data stay local. The root Makefile is a legacy flow, not this demo's test.
+
 The directories in this repository are strictly organized by purpose. All team members must adhere to the following usage rules:
 
 ### 1. 📁 Implementation/

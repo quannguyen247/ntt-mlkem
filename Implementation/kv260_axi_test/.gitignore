@@ -1,0 +1,6 @@
+project/
+output/
+*.log
+*.jou
+*.str
+.Xil/
