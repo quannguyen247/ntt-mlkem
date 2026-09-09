@@ -13,14 +13,12 @@ set_property include_dirs [list $root/Implementation/rtl/utils] [current_fileset
 foreach name {ntt_agu ntt_butterfly ntt_controller ntt_core_top ntt_mod_mul_12b ntt_ram_dual ntt_twiddle_rom} {
     read_verilog $root/Implementation/rtl/modules/$name.v
 }
-read_xdc $root/Implementation/benchmark/core_200mhz.xdc
-synth_design -top ntt_core_top -part xc7a100tfgg676-3 -mode out_of_context -directive $directive
-# A fixed virtual integration clock-buffer site makes OOC hold analysis meaningful.
-read_xdc $root/Implementation/benchmark/ooc_clock.xdc
+read_xdc $root/Implementation/constraint/ntt.xdc
+synth_design -top ntt_core_top -part xc7a100tfgg676-3 -mode out_of_context -max_dsp 0 -directive $directive
 opt_design
-place_design -directive Explore
+place_design
 phys_opt_design
-route_design -directive Explore
+route_design
 report_timing_summary -delay_type min_max -report_unconstrained -file $out/timing.rpt
 report_utilization -hierarchical -file $out/utilization_hier.rpt
 report_utilization -file $out/utilization.rpt

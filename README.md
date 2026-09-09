@@ -18,8 +18,9 @@ This project is targeted for hardware implementation and physical testing on the
 
 Read [ARTIX200.md](Implementation/benchmark/ARTIX200.md) for the
 `xc7a100tfgg676-3` OOC optimization, reproducible Vivado project, regression,
-power-estimation method and paper comparison. The optimized multiplier adds
-one pipeline cycle. Rebuild the KV260 design before testing this RTL on a board;
+power-estimation method and paper comparison. The current core uses zero DSP
+and zero BRAM with Default strategies and shared `constraint/ntt.xdc`.
+Rebuild the KV260 design before testing this RTL on a board;
 previously generated KV260 bitstreams contain the older RTL.
 
 ### KV260 sensor demo (Linux)
