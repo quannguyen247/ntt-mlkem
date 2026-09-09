@@ -14,6 +14,14 @@ This project is targeted for hardware implementation and physical testing on the
 
 ## Repository Structure and Usage Guidelines
 
+### Artix-7 200 MHz core benchmark
+
+Read [ARTIX200.md](Implementation/benchmark/ARTIX200.md) for the
+`xc7a100tfgg676-3` OOC optimization, reproducible Vivado project, regression,
+power-estimation method and paper comparison. The optimized multiplier adds
+one pipeline cycle. Rebuild the KV260 design before testing this RTL on a board;
+previously generated KV260 bitstreams contain the older RTL.
+
 ### KV260 sensor demo (Linux)
 
 Read [DEMO_GUIDE.md](Implementation/kv260_axi_test/DEMO_GUIDE.md) for tools,

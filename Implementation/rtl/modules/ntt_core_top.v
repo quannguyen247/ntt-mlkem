@@ -59,7 +59,8 @@ module ntt_core_top (
     reg mode_r;
     reg [7:0] zidx_d1;
     reg is_scale_d1;
-    reg [7:0] done_delay;
+    // Drain the extra registered multiplier operand stage before releasing RAM.
+    reg [8:0] done_delay;
 
     wire actual_done;
     wire actual_busy;
@@ -98,14 +99,14 @@ module ntt_core_top (
 
     always @(posedge clk) begin
         if (!rst_n) begin
-            done_delay <= 8'd0;
+            done_delay <= 9'd0;
         end else begin
-            done_delay <= {done_delay[6:0], f_done};
+            done_delay <= {done_delay[7:0], f_done};
         end
     end
 
-    assign actual_done = done_delay[7];
-    assign actual_busy = f_busy || f_done || |done_delay[6:0];
+    assign actual_done = done_delay[8];
+    assign actual_busy = f_busy || f_done || |done_delay[7:0];
     assign controller_start = start && !start_d && !actual_busy;
     assign advance_now = f_busy && !f_done;
     assign operation_mode = controller_start ? mode : mode_r;

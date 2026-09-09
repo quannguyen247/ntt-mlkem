@@ -8,8 +8,8 @@ module ntt_mod_mul_12b (
     output reg [11:0] r_o
 );
 
-    wire [23:0] pp [0:11];
-    wire [23:0] t_comb;
+    (* use_dsp = "yes" *) wire [23:0] t_comb;
+    reg [11:0] a_reg, b_reg;
     reg [23:0] t_reg;
 
     wire [15:0] t_16;
@@ -30,18 +30,13 @@ module ntt_mod_mul_12b (
     wire [13:0] sub_val;
     wire [11:0] reduced_comb;
 
-    genvar g;
-    generate
-        for (g = 0; g < 12; g = g + 1) begin : gen_pp
-            assign pp[g] = a_i[g] ? ({12'd0, b_i} << g) : 24'd0;
-        end
-    endgenerate
-
-    assign t_comb = ((pp[0] + pp[1]) + (pp[2] + pp[3])) +
-                    ((pp[4] + pp[5]) + (pp[6] + pp[7])) +
-                    ((pp[8] + pp[9]) + (pp[10] + pp[11]));
+    // Registered DSP operands break the INTT subtract -> multiply path.
+    // Five-cycle latency: operands, product, m, t+m*q, canonical result.
+    assign t_comb = a_reg * b_reg;
 
     always @(posedge clk) begin
+        a_reg <= a_i;
+        b_reg <= b_i;
         t_reg <= t_comb;
     end
 
