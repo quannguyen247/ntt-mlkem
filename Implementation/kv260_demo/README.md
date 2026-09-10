@@ -2,7 +2,7 @@
 
 ## 1. Demo hiện tại
 
-Entry point: `Implementation/kv260_axi_test/simple_demo.py`, chạy trên PC Linux.
+Entry point: `Implementation/kv260_demo/simple_demo.py`, chạy trên PC Linux.
 App một nút thu raw thực từ MAX30102; tín hiệu đạt thì ARM chạy NTT/INTT trên PL.
 Đồ thị là đợt vừa thu, không phải realtime liên tục. BPM/SpO₂ do PC ước lượng,
 chưa hiệu chuẩn. NTT không tính BPM/SpO₂ và chưa phải mã hóa/giải mã ML-KEM hoàn chỉnh.
@@ -36,7 +36,7 @@ Từ root repo:
 ```bash
 export VITIS_HOME=/home/quan/tools/Xilinx/2025.2.1/Vitis
 python3 -c "from PySide6.QtWidgets import QApplication; print('Qt OK')"
-python3 Implementation/kv260_axi_test/simple_demo.py
+python3 Implementation/kv260_demo/simple_demo.py
 ```
 
 Máy khác: thay VITIS_HOME đúng thư mục Vitis. Thiếu PySide6 thì tạo venv và
@@ -47,7 +47,7 @@ Cần artifact local:
 - `output/i2c.bit`
 - `project/kv260_axi_test.gen/sources_1/bd/ntt_system/ip/ntt_system_ps_0/psu_init.tcl`
 
-Các đường dẫn trên tương đối với kv260_axi_test. ELF được build mỗi lượt.
+Các đường dẫn trên tương đối với thư mục demo. ELF được build mỗi lượt.
 
 1. Cấp nguồn kit và nối USB J4; dừng các app/test khác dùng JTAG/ARM.
 2. Đặt nhẹ đầu ngón tay phủ cửa sổ quang, giữ yên.
@@ -61,55 +61,46 @@ Quality gate là heuristic, không phải bộ phát hiện ngón tay được c
 Dùng ngón tay cho demo; chưa kiểm chứng cấu hình cổ tay.
 Không giảm ngưỡng để buộc PASS.
 
-## 4. Build từ source
+## 4. Build phần cứng và xuất artifact
 
-Từ root repo, chạy theo thứ tự, mỗi lệnh một tiến trình Vivado:
+Từ root repo:
 
 ```bash
 export VIVADO_HOME=/home/quan/tools/Xilinx/2025.2.1/Vivado
-"$VIVADO_HOME/bin/vivado" -mode batch -source Implementation/kv260_axi_test/build.tcl
-"$VIVADO_HOME/bin/vivado" -mode batch -source Implementation/kv260_axi_test/build_i2c.tcl
+"$VIVADO_HOME/bin/vivado" -mode batch -source Implementation/kv260_demo/build.tcl
 ```
 
-Bước 1 dựng PS→AXI→NTT và xuất kv260_axi_test.xsa (NTT-only).
-Bước 2 thêm AXI GPIO, I²C; xuất i2c.bit, kv260_sensor.xsa, i2c_timing.rpt,
-i2c_drc.rpt. Chờ SENSOR_ARTIFACTS_READY và build thành công.
-Không dùng XSA NTT-only để chứng minh cảm biến.
+Một lượt dựng PS–AXI–NTT và GPIO cảm biến, chạy đến bitstream rồi xuất
+`output/i2c.bit` và `output/kv260_sensor.xsa`. Script chỉ xuất khi setup/hold
+đạt ở 200 MHz. Đây là thiết kế KV260, không phải lượt đo PPA Artix-7 OOC.
+`build.tcl` từ chối ghi đè `project/` hiện có: đóng project, chuyển thư mục
+đó sang nơi lưu dự phòng rồi mới build lại. Không xóa captures trong `output/`.
+Tên project bên trong vẫn là `kv260_axi_test` để giữ đường dẫn khởi tạo PS.
 
-build.tcl dùng create_project -force: lưu bản sao trước nếu có chỉnh sửa GUI.
-project/output được ignore trong Git, giữ local để demo nhanh.
+## 5. Mở thiết kế để trình bày (không bắt buộc Vitis GUI)
 
-## 5. Vivado GUI cho ban giám khảo
-
-Nếu project đã có: Open Project → kv260_axi_test/project/kv260_axi_test.xpr.
-
-Nếu chưa có: trong Tcl Console, thay đường dẫn repo:
+Nếu chỉ chuẩn bị block design, trong Vivado Tcl Console khi chưa mở project:
 
 ```tcl
-cd /duong/dan/repo/Implementation/kv260_axi_test
-set ::kv260_gui_only 1
-source build.tcl
-source build_i2c.tcl
-unset ::kv260_gui_only
+set ::kv260_action prepare
+source /duong/dan/repo/Implementation/kv260_demo/build.tcl
+unset ::kv260_action
 ```
 
-Script chuẩn bị thiết kế, dừng trước synthesis.
+Mở `ntt_system.bd`: NTT ở `0xA0000000`, GPIO ở `0xA0010000`, PS cấp
+clock 200 MHz. Sau Run Synthesis → Run Implementation → Generate Bitstream,
+xuất artifact từ chính project này:
 
-1. Open Block Design → ntt_system.bd.
-2. Chỉ PS ps, interconnect, ntt và sensor_gpio.
-3. Mở PS kiểm tra PL0=200 MHz. Address Editor: NTT=0xA0000000,
-   GPIO=0xA0010000.
-4. Sources → Constraints → sensor.xdc: hai chân I²C.
-5. Run Synthesis → Run Implementation → Generate Bitstream.
-6. Open Implemented Design → Report Timing Summary: clock 5 ns,
-   setup/hold slack không âm. Xem DRC; không lấy report OOC thay routed.
-7. Tại Tcl Console, trong kv260_axi_test: `source publish_i2c.tcl`.
-   Script kiểm tra clock/setup/hold trước khi xuất artifact cho app.
-8. Chạy app: app thực hiện khởi tạo PS và nạp bitstream.
+```tcl
+set ::kv260_action publish
+source /duong/dan/repo/Implementation/kv260_demo/build.tcl
+unset ::kv260_action
+```
 
-Bản sensor AXI không có VIO. Nếu muốn điều khiển VIO bằng tay, đọc
-[DEMO_VIVADO.md](../kv260_debug/DEMO_VIVADO.md), dùng bitstream riêng.
-VIO không chứng minh CPU điều khiển AXI. Không nạp đồng thời hai thiết kế.
+Vivado Tcl dựng phần cứng; **XSCT** (Xilinx Software Command-line Tool)
+khởi tạo và chạy chương trình ARM. Hai môi trường không dùng thay cho nhau.
+Demo này biên dịch C/ASM bằng compiler Vitis và nạp ELF qua XSCT, không phụ
+thuộc `Validation/ntt_platform` hay platform tạo bằng Vitis GUI.
 
 ## 6. Flow dữ liệu chính xác
 
@@ -160,7 +151,7 @@ từ chối thành công; không phải NTT PASS.
 
 ## 8. Kiểm tra riêng từng phần
 
-Từ Implementation/kv260_axi_test, đã export VITIS_HOME:
+Từ Implementation/kv260_demo, đã export VITIS_HOME:
 
 ```bash
 # 3 vector, ARM tự kiểm tra 768 hệ số NTT, không cần sensor:
@@ -174,7 +165,7 @@ python3 verify_sensor_ntt.py --quality-gate
 python3 verify_sensor_ntt.py
 ```
 
-Chỉ chạy lần lượt. Test ARM cần artifact build.tcl và project local.
+Chỉ chạy lần lượt. Test ARM dùng bitstream sensor và project local do build.tcl tạo.
 
 ## 9. Kịch bản demo 3–5 phút
 
@@ -188,12 +179,81 @@ Chỉ chạy lần lượt. Test ARM cần artifact build.tcl và project local.
 ## 10. Bàn giao cho AI agents
 
 - Branch đích dev_quan; không merge main.
-- Source chính: rtl/modules/, rtl/utils/, vector/ntt_gen.py, kv260_axi_test/.
+- Source chính: rtl/modules/, rtl/utils/, vector/ntt_gen.py, kv260_demo/.
 - Không sửa PQClean, Kyber-Round3-KAT, form(donotedit) hoặc phần ngoài nhiệm vụ.
-- kv260_debug là VIO riêng; không nhập nhằng với ARM/AXI.
+- vio/ là VIO riêng; không nhập nhằng với ARM/AXI.
 - Không commit project sinh tự động, bit/XSA/ELF hoặc captures sinh lý.
   Giữ local; commit Tcl/RTL/C/ASM/Python/Markdown để tái tạo.
 - Không thay đổi RTL/quality gate/công thức dưới danh nghĩa cleanup.
 - Ghi test thực đã chạy và giới hạn; không gọi estimated Fmax là hardware-verified.
 - Root Makefile là flow cũ tham chiếu src/ và testbench/ không còn trong checkout;
   không dùng make test để xác minh demo này.
+
+## 11. VIO tùy chọn
+
+`vio/` chứa thiết kế độc lập: PS cấp clock/reset, JTAG/VIO điều khiển lõi.
+Nó không có ARM–AXI–cảm biến và không thay thế demo chính. Chạy lần lượt:
+
+```bash
+"$VIVADO_HOME/bin/vivado" -mode batch -source Implementation/kv260_demo/vio/create_kv260_debug.tcl
+"$VITIS_HOME/bin/xsct" -nodisp Implementation/kv260_demo/vio/init_and_program.tcl
+"$VIVADO_HOME/bin/vivado" -mode batch -source Implementation/kv260_demo/vio/hardware_ntt_vector_test.tcl
+```
+
+Script tạo VIO dùng `create_project -force`; lưu project đã chỉnh tay trước
+khi chạy. Test vector cần `Implementation/vector/tv_all.mem` do `ntt_gen.py`
+tạo. `hardware_smoke_test.tcl` kiểm tra RAM và vector 0;
+`hardware_ntt_vector_test.tcl` kiểm tra 256 hệ số vector all-max.
+`verify_vio.tcl` chỉ kiểm tra khả năng truy cập VIO.
+
+Trong Hardware Manager chọn file `vio/output/ntt_kv260_debug.ltx` đi kèm
+đúng bitstream. Output probe 0..5 lần lượt là resetn, start, mode, ext_we,
+ext_addr[7:0], ext_din[11:0]. Input 0..3 là ext_dout[11:0], busy, done,
+done_sticky. Reset trước khi nạp đủ 256 hệ số; pulse start và chờ done_sticky.
+Done không tự chứng minh kết quả đúng: phải đối chiếu đủ đầu ra.
+
+## 12. Trạng thái bằng chứng
+
+Các artifact/captures đã có được giữ nguyên khi chuyển thư mục. Log cũ
+không chứng minh RTL mới hoặc thiết kế vừa refactor đã chạy trên kit.
+Lượt sensor lịch sử `sensor-ntt-20260907-142221-678483` ghi PASS 1024 hệ số
+mỗi chiều và round-trip chuẩn hóa; lượt VIO tháng 8 là một thiết kế khác.
+Không dùng hai kết quả này thay cho kiểm thử lại sau build mới.
+
+Sau di chuyển thư mục, nên tái tạo project nếu Vivado báo đường dẫn nguồn
+cũ; không sửa dữ liệu expected để vượt test. Chỉ chạy một client JTAG/ARM.
+Chưa kết nối kit hoặc chưa chạy test phải ghi **NOT RUN**, không ghi PASS.
+
+Kiểm tra refactor ngày 10/09/2026:
+
+- Build mới bằng Tcl gộp, trong `build/kv260-refactor-check/`: hoàn tất đến
+  bitstream/XSA; clock 5 ns, WNS +1.216 ns, WHS +0.013 ns, không có endpoint
+  setup/hold vi phạm. Đây là timing toàn thiết kế KV260, không thay số Artix-7.
+- C/ASM của test ARM và demo quality-gated: biên dịch thành ELF thành công.
+- Regression RTL: 266 phép biến đổi, 68.096 hệ số, PASS.
+- XSim 2025.2.1: 74 phép biến đổi, 18.944 hệ số, PASS; 905/1161 chu kỳ.
+- RTL, sensor.c, sensor_ntt.c và ngưỡng quality gate không đổi khi refactor.
+- Kit: chưa chạy lại trong lượt refactor này. Các bước VIO đã sửa đường dẫn
+  nguồn nhưng chưa build/chạy phần cứng lại trong lượt này.
+
+## 13. Chụp waveform cho báo cáo
+
+Testbench duy nhất: `Implementation/testbench/tb_ntt_core_top.sv`.
+`benchmark/capture_wave.tcl` dùng trong **XSim**, không dùng trong XSCT.
+Lượt XSim ngày 10/09 lưu `ntt_cycles.wdb`, `ntt_cycles.wcfg` và `xsim.log`
+ở `build/ppa/waveform-20260910/` (local, không đưa database lớn lên Git).
+
+Trong Vivado Tcl Console, thay ROOT bằng đường dẫn repo:
+
+```tcl
+open_wave_database ROOT/build/ppa/waveform-20260910/ntt_cycles.wdb
+open_wave_config ROOT/build/ppa/waveform-20260910/ntt_cycles.wcfg
+```
+
+Giữ các tín hiệu clk, rst_n, start, mode, busy, done, cycles, len và cnt.
+Lượt đầu NTT: cạnh nhận start ở 1502.5 ns, done lên ở 6027.5 ns,
+chênh 4525 ns = 905 clock. Lượt kế INTT: 8637.5 → 14442.5 ns,
+chênh 5805 ns = 1161 clock. Đặt hai cursor tại hai cạnh này, không đo từ
+cạnh lên start ở cạnh xuống clock của testbench (lệch nửa chu kỳ).
+Chụp riêng vùng Wave có tên tín hiệu, trục thời gian và hai cursor;
+chụp NTT và INTT riêng để chữ rõ. Log PASS là ảnh bổ sung, không thay waveform.

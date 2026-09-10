@@ -25,7 +25,7 @@ previously generated KV260 bitstreams contain the older RTL.
 
 ### KV260 sensor demo (Linux)
 
-Read [DEMO_GUIDE.md](Implementation/kv260_axi_test/DEMO_GUIDE.md) for tools,
+Read [KV260 demo guide](Implementation/kv260_demo/README.md) for tools,
 Vivado GUI/build steps, the one-button MAX30102 → ARM → AXI → NTT/INTT demo,
 PASS/NOT RUN criteria and AI-agent handoff. Generated projects and captured
 sensor data stay local. The root Makefile is a legacy flow, not this demo's test.

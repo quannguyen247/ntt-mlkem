@@ -2,7 +2,7 @@
 
 Copy and fill this template when documenting a new module. Bracketed fields
 are placeholders, not claims about the current NTT core. For the working
-demo, read [DEMO_GUIDE.md](../../Implementation/kv260_axi_test/DEMO_GUIDE.md).
+demo, read [KV260 demo guide](../../Implementation/kv260_demo/README.md).
 
 ## [Module Name] Specification
 

@@ -16,7 +16,7 @@ print('EVIDENCE='+str(out),flush=True)
 tool=Path(os.environ.get('VITIS_HOME','/home/quan/tools/Xilinx/2025.2.1/Vitis'))
 gcc=tool/'gnu/aarch64/lin/aarch64-none/bin/aarch64-none-elf-gcc'
 for required in (gcc,tool/'bin/xsct',here/'output/i2c.bit',here/'project/kv260_axi_test.gen/sources_1/bd/ntt_system/ip/ntt_system_ps_0/psu_init.tcl'):
-    if not required.is_file():raise SystemExit('Missing prerequisite: '+str(required)+'; see DEMO_GUIDE.md')
+    if not required.is_file():raise SystemExit('Missing prerequisite: '+str(required)+'; see README.md')
 os.environ['VITIS_HOME']=str(tool)
 elf=out/'sensor_ntt.elf'
 defines=['-DQUALITY_GATE','-DSAMPLE_LIMIT=1024','-DRAW_CAPACITY=1024'] if gated else []

@@ -1,5 +1,5 @@
 set script_dir [file normalize [file dirname [info script]]]
-set impl_dir [file normalize [file join $script_dir ..]]
+set impl_dir [file normalize [file join $script_dir .. ..]]
 set project_dir [file normalize [file join $script_dir project]]
 set output_dir [file normalize [file join $script_dir output]]
 

@@ -5,7 +5,7 @@ proc run_test {} {
     set bit $here/project/kv260_axi_test.runs/impl_1/ntt_system_wrapper.bit
     set init $here/project/kv260_axi_test.gen/sources_1/bd/ntt_system/ip/ntt_system_ps_0/psu_init.tcl
     set elf $here/output/test.elf
-    foreach f [list $bit $init $elf $here/output/kv260_axi_test.xsa] {
+    foreach f [list $bit $init $elf] {
         if {![file exists $f]} {error "Missing build artifact: $f"}
     }
     set nm /home/quan/tools/Xilinx/2025.2.1/Vitis/gnu/aarch64/lin/aarch64-none/bin/aarch64-none-elf-nm

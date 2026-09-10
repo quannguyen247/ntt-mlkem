@@ -1,5 +1,5 @@
 set script_dir [file normalize [file dirname [info script]]]
-set impl_dir [file normalize [file join $script_dir ..]]
+set impl_dir [file normalize [file join $script_dir .. ..]]
 set probes_file [file normalize [file join $script_dir output \
     ntt_kv260_debug.ltx]]
 set vector_file [file normalize [file join $impl_dir vector tv_all.mem]]

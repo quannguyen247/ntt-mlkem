@@ -36,6 +36,13 @@ module tb_ntt_core_top;
     wire [11:0] ext_dout;
     wire busy,done;
     ntt_core_top dut(.*);
+    // Optional waveform capture, using the same self-checking testbench.
+    initial begin
+        if ($test$plusargs("DUMP_VCD")) begin
+            $dumpfile("ntt_cycles.vcd");
+            $dumpvars(0, tb_ntt_core_top);
+        end
+    end
     reg [11:0] inputs [0:CASES*256-1], expected [0:CASES*256-1];
     reg modes [0:CASES-1];
     integer c,j,cycles,checked=0,fd;
