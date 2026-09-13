@@ -1,52 +1,64 @@
-﻿# 12-bit NTT Microarchitecture for ML-KEM Optimized for Medical Edge Devices
+# 12-bit NTT/INTT core for ML-KEM
 
-**Project:** 12-bit Number Theoretic Transform (NTT) microarchitecture for the ML-KEM post-quantum cryptography algorithm, focusing on hardware resource optimization for deployment on edge devices in the biomedical/healthcare sector.
+IC4Duck phát triển một lõi NTT/INTT 256 hệ số, mô-đun 3329, hướng tới thiết bị
+edge có tài nguyên hạn chế. Lõi dùng chung datapath thuận/nghịch, một butterfly,
+Montgomery multiplier ánh xạ LUT và RAM phân tán hai bank. Demo KV260 nối
+MAX30102, Cortex-A53, AXI4-Lite và lõi PL thành một flow có bằng chứng CSV/JSON.
 
-This project is targeted for hardware implementation and physical testing on the **KV260** (Xilinx Kria KV260 Vision AI) FPGA/SoC.
+Đây là lõi NTT/INTT, chưa phải một hiện thực ML-KEM hoàn chỉnh. Dữ liệu sensor
+trong demo cũng chưa được mã hóa và các giá trị BPM/SpO2 chưa được hiệu chuẩn.
 
-## Development Team: IC4Duck
-- **Nguyen Dong Quan**
-- **Huynh Nhat Phat**
-- **Nguyen Duc Phuc**
-- **Ngo Gia Bao**
+## Chạy nhanh
 
----
+```bash
+make test          # 74 phép NTT/INTT, 18.944 hệ số
+make demo-doctor   # kiểm tra tool và độ mới của artifact KV260
+make demo          # mở giao diện demo một nút
+```
 
-## Repository Structure and Usage Guidelines
+Các flow còn lại vẫn dùng cùng entry point `Demo/demo.py`:
 
-### Artix-7 200 MHz core benchmark
+```bash
+make artix         # OOC Artix-7 200 MHz và báo cáo PPA
+make demo-build    # dựng lại bitstream/XSA KV260
+make demo-wave     # tạo waveform XSim tự kiểm tra
+```
 
-Read [ARTIX200.md](Implementation/benchmark/ARTIX200.md) for the
-`xc7a100tfgg676-3` OOC optimization, reproducible Vivado project, regression,
-power-estimation method and paper comparison. The current core uses zero DSP
-and zero BRAM with Default strategies and shared `constraint/ntt.xdc`.
-Rebuild the KV260 design before testing this RTL on a board;
-previously generated KV260 bitstreams contain the older RTL.
+## Cấu trúc repository
 
-### KV260 sensor demo (Linux)
+```text
+ntt-mlkem/
+├── Implementation/
+│   ├── rtl/               # lõi NTT/INTT synthesizable
+│   ├── testbench/         # testbench self-checking dùng chung
+│   ├── constraint/        # clock OOC 5 ns
+│   └── vector/            # golden model lịch sử của repo
+├── Demo/
+│   ├── demo.py            # entry point cho regression, PPA và demo board
+│   ├── demo.tcl           # backend duy nhất cho Vivado, XSim và XSCT
+│   ├── firmware/          # A53 freestanding
+│   ├── rtl/               # wrapper AXI4-Lite của KV260
+│   └── README.md
+├── Docs/
+│   └── SPEC.md            # đặc tả, nguồn tham khảo và traceability
+└── Makefile
+```
 
-Read [KV260 demo guide](Implementation/kv260_demo/README.md) for tools,
-Vivado GUI/build steps, the one-button MAX30102 → ARM → AXI → NTT/INTT demo,
-PASS/NOT RUN criteria and AI-agent handoff. Generated projects and captured
-sensor data stay local. The root Makefile is a legacy flow, not this demo's test.
+`Demo/project`, `Demo/output`, `Demo/waveform` và `build` là artifact local đã
+được ignore. Bitstream, XSA, ELF, dữ liệu sinh lý và waveform database không
+được commit.
 
-The directories in this repository are strictly organized by purpose. All team members must adhere to the following usage rules:
+Đọc [đặc tả thiết kế](Docs/SPEC.md) để xem quy ước toán học, register map,
+phương pháp xác minh, PPA và nguồn tham khảo. Đọc [hướng dẫn demo](Demo/README.md)
+trước khi nạp KV260.
 
-### 1. 📁 Implementation/
-- **Purpose:** Main project directory.
-- **Usage:** Members should place all official HDL source files (Verilog/VHDL), IP Cores, and main Vivado/Vitis project configuration files here. This is used for system integration, synthesis, and final deployment onto the KV260 hardware.
+## Nhóm phát triển
 
-### 2. 📁 Test/
-- **Purpose:** Testing and sandbox environment for tinkering. 
-- **Usage:** Contains simulation scripts for individual modules, draft testbenches, and isolated debug tests. Feel free to experiment here without breaking the main project structure.
-
-### 3. 📁 PQClean/ & 📁 Kyber-Round3-KAT/
-- **Purpose:** Standard C source code (Reference Implementations / Known Answer Tests).
-- **Usage:** Served as the golden reference. The output of our hardware HDL design will be compared against these software libraries to ensure functional correctness.
-- ⚠️ **CRITICAL NOTE:** These are original source directories and **MUST NOT BE MODIFIED OR TOUCHED**. They are governed by their own independent licenses found within their respective folders. Therefore, no personal code commits should be made into these two directories.
-
----
+- Nguyen Dong Quan
+- Huynh Nhat Phat
+- Nguyen Duc Phuc
+- Ngo Gia Bao
 
 ## License
-This project is distributed under the **[Apache License 2.0](LICENSE)** (Copyright 2026 IC4Duck). 
-*(Note: This license applies exclusively to the source code created by the team in the Implementation/ and KV260_Test/ directories, and does not override the original licenses of the PQClean/ and Kyber-Round3-KAT/ reference directories).*
+
+Mã nguồn do nhóm tạo được phát hành theo [Apache License 2.0](LICENSE).
