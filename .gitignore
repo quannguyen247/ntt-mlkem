@@ -1,54 +1,51 @@
-# Vivado temporary files
-.Xil/
-Implementation/.Xil/
-Implementation/*.log
-Implementation/*.jou
-Implementation/*.str
-Implementation/logs/
-Implementation/NTT.cache/
-Implementation/NTT.hw/
-Implementation/NTT.ip_user_files/
-Implementation/NTT.sim/
-Implementation/NTT.runs/
-Implementation/NTT.ioplanning/
-Implementation/NTT.srcs/
-Implementation/NTT.gen/
-# Legacy machine-local GUI project; reproducible demo sources are Tcl scripts.
-/Implementation/NTT.xpr
-
-# Simulation outputs & logs
-build/
-work/
-transcript
-vsim.wlf
+# Vivado/Vitis temporary files
+**/.Xil/
+*.jou
+*.log
+*.str
 *.wlf
-xsim.dir/
-xsim.log
-xsim.jou
-webtalk*
-Implementation/testbench/ntt_result.log
-Implementation/testbench/intt_result.log
-
-# Generated test vectors
-Implementation/vector/*
-!Implementation/vector/ntt_gen.py
-
-# Python virtual environment
-.venv/
-__pycache__/
 *.pyc
-
-# DFX
+__pycache__/
+webtalk*
+xsim.dir/
+/xvlog.log
+/xvlog.pb
 dfx_runtime.txt
 
+# Legacy machine-local Vivado project
+/Implementation/NTT.cache/
+/Implementation/NTT.hw/
+/Implementation/NTT.ip_user_files/
+/Implementation/NTT.sim/
+/Implementation/NTT.runs/
+/Implementation/NTT.ioplanning/
+/Implementation/NTT.srcs/
+/Implementation/NTT.gen/
+/Implementation/NTT.xpr
+
+# Generated demo workspaces and artifacts. Demo source is tracked.
+/Demo/project/
+/Demo/output/
+/Demo/waveform/
+
+# Simulation outputs
+/build/
+work/
+transcript
+/Implementation/testbench/ntt_result.log
+/Implementation/testbench/intt_result.log
+
+# Generated test vectors
+/Implementation/vector/*
+!/Implementation/vector/ntt_gen.py
+
+# Python virtual environments
+.venv/
+venv/
+
+# Local material kept outside the repository deliverable
 form(donotedit)/
 Bao_cao_tien_do_TKVM/
 MAX30102/
-Validation/
-
-# Root-level tool scratch files
-/xvlog.log
-/xvlog.pb
-/*.jou
-/*.log
-/*.str
+/Docs/IC4Duck_BaoCao.pdf
+/Docs/IC4Duck_Slide.pdf

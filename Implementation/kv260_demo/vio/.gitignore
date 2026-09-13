@@ -1,9 +1,0 @@
-.Xil/
-project/
-
-*.jou
-*.log
-*.backup.*
-dfx_runtime.txt
-
-output/
