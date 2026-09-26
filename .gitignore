@@ -13,6 +13,15 @@ Implementation/NTT.runs/
 Implementation/NTT.ioplanning/
 Implementation/NTT.srcs/
 Implementation/NTT.gen/
+Implementation/reports/
+/vivado.log
+/vivado.jou
+/vivado_*.backup.*
+/xvlog.log
+/xvlog.pb
+/xelab.log
+/xelab.pb
+/xsim_*.backup.*
 
 # Simulation outputs & logs
 build/

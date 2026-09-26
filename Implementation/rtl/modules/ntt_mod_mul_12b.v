@@ -8,8 +8,8 @@ module ntt_mod_mul_12b (
     output reg [11:0] r_o
 );
 
-    wire [23:0] pp [0:11];
-    wire [23:0] t_comb;
+    (* use_dsp = "no" *) wire [23:0] t_comb;
+    reg [11:0] a_reg, b_reg;
     reg [23:0] t_reg;
 
     wire [15:0] t_16;
@@ -30,25 +30,20 @@ module ntt_mod_mul_12b (
     wire [13:0] sub_val;
     wire [11:0] reduced_comb;
 
-    genvar g;
-    generate
-        for (g = 0; g < 12; g = g + 1) begin : gen_pp
-            assign pp[g] = a_i[g] ? ({12'd0, b_i} << g) : 24'd0;
-        end
-    endgenerate
-
-    assign t_comb = ((pp[0] + pp[1]) + (pp[2] + pp[3])) +
-                    ((pp[4] + pp[5]) + (pp[6] + pp[7])) +
-                    ((pp[8] + pp[9]) + (pp[10] + pp[11]));
+    // Registered operands break the INTT subtract -> multiply path.
+    // Five-cycle latency: operands, product, m, t+m*q, canonical result.
+    assign t_comb = a_reg * b_reg;
 
     always @(posedge clk) begin
+        a_reg <= a_i;
+        b_reg <= b_i;
         t_reg <= t_comb;
     end
 
     assign t_16 = t_reg[15:0];
-    assign p1_m = (t_16 << 12) - (t_16 << 9);
-    assign p2_m = (t_16 << 8)  + t_16;
-    assign m_comb = p1_m - p2_m;
+    assign p1_m = (t_16 << 12) - (t_16 << 9); // t × 4096 - t × 512 = t × 3584
+    assign p2_m = (t_16 << 8)  + t_16;        // t × 256  + t × 1   = t × 257
+    assign m_comb = p1_m - p2_m;              // t × 3584 - t × 257 = t × 3327
 
     always @(posedge clk) begin
         m_reg <= m_comb;
@@ -56,9 +51,9 @@ module ntt_mod_mul_12b (
     end
 
     assign m_29 = {13'd0, m_reg};
-    assign p1_mq = (m_29 << 12) - (m_29 << 9);
-    assign p2_mq = (m_29 << 8)  - m_29;
-    assign mq_comb = p1_mq - p2_mq;
+    assign p1_mq = (m_29 << 12) - (m_29 << 9); // m × 4096 - m × 512 = m × 3584
+    assign p2_mq = (m_29 << 8)  - m_29;        // m × 256  - m × 1   = m × 255
+    assign mq_comb = p1_mq - p2_mq;            // m × 3584 - m × 255 = m × 3329
     assign t_plus_comb = {5'd0, t_reg_d1} + mq_comb;
 
     always @(posedge clk) begin

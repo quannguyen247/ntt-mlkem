@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module ntt_agu (
+(* use_dsp = "no" *) module ntt_agu (
     input wire clk,
     input wire rst_n,
     input wire start,
