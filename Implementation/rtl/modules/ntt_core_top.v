@@ -1,28 +1,34 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
+`ifdef NTT_ILA_DEBUG
+`define NTT_DEBUG (* mark_debug = "true" *)
+`else
+`define NTT_DEBUG
+`endif
+
 module ntt_core_top (
     input wire clk,
     input wire rst_n,
-    input wire start,
-    input wire mode,
+    `NTT_DEBUG input wire start,
+    `NTT_DEBUG input wire mode,
     input wire ext_we,
     input wire [7:0] ext_addr,
     input wire [11:0] ext_din,
-    output wire [11:0] ext_dout,
-    output wire busy,
-    output wire done
+    `NTT_DEBUG output wire [11:0] ext_dout,
+    `NTT_DEBUG output wire busy,
+    `NTT_DEBUG output wire done
 );
 
     localparam AFIFO_DEPTH = 16;
 
-    wire [1:0] fstate;
+    `NTT_DEBUG wire [1:0] fstate;
     wire f_busy;
     wire f_done;
-    wire [7:0] len;
+    `NTT_DEBUG wire [7:0] len;
     wire [7:0] pos;
     wire [7:0] zidx;
-    wire [7:0] cnt;
+    `NTT_DEBUG wire [7:0] cnt;
     wire is_scale_now;
     wire controller_start;
     wire advance_now;
@@ -234,3 +240,5 @@ module ntt_core_top (
     end
 
 endmodule
+
+`undef NTT_DEBUG

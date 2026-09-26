@@ -26,6 +26,14 @@ int main(void) {
             if(v!=expected[c][i]) {result[0]=0xBAD3;result[2]=i;result[3]=v;result[4]=expected[c][i];return 1;}
             result[5]++;
         }
+#ifdef ILA_TRIGGER_ONLY
+        ntt[2]=1; barrier();
+        ntt[0]=3; barrier(); /* Start INTT so the ILA can capture the transaction. */
+        timeout=10000000;
+        while (!(ntt[1]&2) && --timeout) {}
+        if (!timeout) {result[0]=0xBADC;return 1;}
+        result[6]++;
+#endif
     }
     result[0]=0x600D;barrier();return 0;
 }

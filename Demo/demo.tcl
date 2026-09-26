@@ -6,6 +6,7 @@ set demo_project [file join $demo_here project]
 set demo_output [file join $demo_here output]
 set demo_project_name kv260_sensor_demo
 
+# Capture the transform waveforms in XSim.
 proc demo_capture_wave {} {
     set scopes [get_scopes]
     if {[llength $scopes] == 0} {error "XSim returned no design scopes"}
@@ -52,6 +53,7 @@ proc demo_psu_init_path {} {
     return $path
 }
 
+# Run the Artix-7 out-of-context implementation.
 proc demo_artix {output_dir} {
     global demo_impl
     set output_dir [file normalize $output_dir]
@@ -87,9 +89,10 @@ proc demo_artix {output_dir} {
     puts "ARTIX200_READY=$output_dir"
 }
 
+# Build the KV260 PS, AXI NTT wrapper, and sensor GPIO.
 proc demo_build {action} {
     global demo_here demo_impl demo_project demo_output demo_project_name
-    if {$action ni {build prepare publish}} {error "Action must be build, prepare or publish"}
+    if {$action ni {build prepare publish build-ila}} {error "Action must be build, prepare, publish or build-ila"}
     if {$action ne "publish"} {
         if {[file exists $demo_project]} {error "Generated project already exists: $demo_project"}
         if {[current_project -quiet] ne ""} {error "Close the current Vivado project first"}
@@ -99,6 +102,9 @@ proc demo_build {action} {
         add_files [glob [file join $demo_impl rtl utils *.vh]]
         add_files [file join $demo_here rtl ntt_core_axi_lite.v]
         set_property include_dirs [list [file join $demo_impl rtl utils]] [get_filesets sources_1]
+        if {$action eq "build-ila"} {
+            set_property verilog_define {NTT_ILA_DEBUG} [get_filesets sources_1]
+        }
 
         create_bd_design ntt_system
         set ps [create_bd_cell -type ip -vlnv xilinx.com:ip:zynq_ultra_ps_e:* ps]
@@ -139,7 +145,10 @@ proc demo_build {action} {
 
         validate_bd_design
         save_bd_design
-        add_files -fileset constrs_1 -norecurse [file join $demo_here sensor.xdc]
+        # save_constraints in the ILA flow must not rewrite the tracked source XDC.
+        set project_xdc [file join $demo_project sensor.xdc]
+        file copy -force [file join $demo_here sensor.xdc] $project_xdc
+        add_files -fileset constrs_1 -norecurse $project_xdc
         set bd [get_files ntt_system.bd]
         generate_target all $bd
         add_files [make_wrapper -files $bd -top]
@@ -148,6 +157,53 @@ proc demo_build {action} {
         if {$action eq "prepare"} {
             puts "SENSOR_PROJECT_READY=$demo_project"
             return
+        }
+        if {$action eq "build-ila"} {
+            puts "INFO: Building with automated ILA core..."
+            launch_runs synth_1 -jobs 8
+            wait_on_run synth_1
+            if {[get_property STATUS [get_runs synth_1]] ne "synth_design Complete!"} {
+                error "Synthesis did not complete successfully"
+            }
+            open_run synth_1
+            set ila [create_debug_core u_ila_0 ila]
+            set_property C_DATA_DEPTH 4096 $ila
+            set_property C_INPUT_PIPE_STAGES 1 $ila
+            set_property port_width 1 [get_debug_ports $ila/clk]
+            connect_debug_port $ila/clk [get_nets ntt_system_i/ps_pl_clk0]
+            set hub [get_debug_cores dbg_hub]
+            if {[llength $hub] != 1} {error "Expected one debug hub: $hub"}
+            set_property C_CLK_INPUT_FREQ_HZ 200000000 $hub
+            set_property C_ENABLE_CLK_DIVIDER true $hub
+            connect_debug_port $hub/clk [get_nets ntt_system_i/ps_pl_clk0]
+
+            set p_idx 0
+            foreach {sig_name width} {
+                start 1
+                mode 1
+                busy 1
+                done 1
+                fstate 2
+                len 8
+                cnt 8
+                ext_dout 12
+            } {
+                if {$p_idx > 0} {
+                    create_debug_port $ila probe
+                }
+                set port [get_debug_ports $ila/probe${p_idx}]
+                set_property port_width $width $port
+                if {$width == 1} {
+                    set net [get_nets -hier -filter "NAME =~ *u_core/${sig_name}"]
+                } else {
+                    set net [lsort -dictionary [get_nets -hier -filter "NAME =~ *u_core/${sig_name}\[*\]"]]
+                }
+                if {[llength $net] != $width} {error "Expected $width debug nets for $sig_name: $net"}
+                connect_debug_port $port $net
+                incr p_idx
+            }
+            save_constraints -force
+            close_design
         }
         launch_runs impl_1 -to_step write_bitstream -jobs 8
         wait_on_run impl_1
@@ -184,6 +240,15 @@ proc demo_build {action} {
     file copy -force \
         [file join $demo_project ${demo_project_name}.runs impl_1 ntt_system_wrapper.bit] \
         [file join $demo_output i2c.bit]
+    set ltx [file join $demo_project ${demo_project_name}.runs impl_1 ntt_system_wrapper.ltx]
+    if {[file isfile $ltx]} {
+        file copy -force $ltx [file join $demo_output i2c.ltx]
+        puts "ILA_PROBES_READY: $ltx"
+    } elseif {$action eq "build-ila"} {
+        error "ILA build completed without a probe file: $ltx"
+    } else {
+        file delete -force [file join $demo_output i2c.ltx]
+    }
     set init_candidates [glob -nocomplain [file join $demo_project ${demo_project_name}.gen sources_1 bd ntt_system ip * psu_init.tcl]]
     if {[llength $init_candidates] != 1} {error "Expected one generated psu_init.tcl: $init_candidates"}
     file copy -force [lindex $init_candidates 0] [file join $demo_output psu_init.tcl]
@@ -200,6 +265,7 @@ proc demo_nm {elf} {
     return [exec $nm $elf]
 }
 
+# Initialize the KV260 and load the firmware through XSCT.
 proc demo_connect_and_init {} {
     global demo_output
     connect -url tcp:127.0.0.1:3121
@@ -219,6 +285,7 @@ proc demo_connect_and_init {} {
     rst -processor
 }
 
+# Capture sensor samples and collect transform results.
 proc demo_sensor {elf capture_dir} {
     global demo_here
     set symbols [demo_nm $elf]
@@ -236,10 +303,40 @@ proc demo_sensor {elf capture_dir} {
             error "Missing quality_approved symbol"
         }
         set gate_breakpoint [bpadd -addr 0x$ready_address]
-        con -block -timeout 30
+        scan $address(result) %x result_base
+        scan $address(raw) %x raw_base
+        set live [open [file join $capture_dir live_raw.csv] w]
+        puts $live "index,red,ir"
+        flush $live
+        set received 0
+        set deadline [expr {[clock milliseconds] + 30000}]
+        con
+        set complete 0
+        while {!$complete} {
+            set progress [mrd -value $result_base 8]
+            set count [lindex $progress 5]
+            if {$count < $received || $count > 1024} {error "Invalid sensor sample count: $count"}
+            if {$count > $received} {
+                set words [mrd -value [expr {$raw_base + 8 * $received}] [expr {2 * ($count - $received)}]]
+                for {set index $received} {$index < $count} {incr index} {
+                    set offset [expr {2 * ($index - $received)}]
+                    puts $live "$index,[lindex $words $offset],[lindex $words [expr {$offset + 1}]]"
+                }
+                flush $live
+                set received $count
+            }
+            if {[lindex $progress 0] >= 0xBAD0 && [lindex $progress 0] <= 0xBAD9} {
+                error "Sensor capture failed: $progress"
+            }
+            set complete [expr {$received == 1024 && [lindex $progress 0] == 0x600D}]
+            if {[clock milliseconds] > $deadline} {error "Sensor capture timed out at $received/1024 samples"}
+            after 150
+        }
+        close $live
+        catch {stop}
         set initial [mrd -value 0x$address(result) 8]
         if {[lindex $initial 0] != 0x600D || [lindex $initial 5] != 1024 || [lindex $initial 6] != 0} {
-            error "Capture did not reach quality gate safely: $initial"
+            error "Capture was incomplete or failed the signal check: $initial"
         }
         set raw_all [mrd -value 0x$address(raw) 2048]
         set stream [open [file join $capture_dir quality_raw.csv] w]
@@ -275,7 +372,7 @@ proc demo_sensor {elf capture_dir} {
         error "Sensor test failed: [format %X [lindex $result 0]]"
     }
     scan $address(raw) %x raw_base
-    set raw_address [expr {$raw_base + ($gated ? 768 * 8 : 0)}]
+    set raw_address [expr {$raw_base + ($gated ? (1024 - 256) * 8 : 0)}]
     set samples [mrd -value $raw_address 512]
     set stream [open [file join $capture_dir sensor_raw.csv] w]
     puts $stream "index,red,ir"
@@ -307,6 +404,7 @@ proc demo_sensor {elf capture_dir} {
     disconnect
 }
 
+# Run the ARM-to-NTT test without the sensor.
 proc demo_arm_test {} {
     global demo_output
     set elf [file join $demo_output test.elf]
@@ -327,6 +425,7 @@ proc demo_arm_test {} {
     disconnect
 }
 
+# Probe the Cortex-A53 target over JTAG.
 proc demo_probe {} {
     connect -url tcp:127.0.0.1:3121
     set matches [targets -target-properties -filter {name == "Cortex-A53 #0"}]
@@ -335,6 +434,32 @@ proc demo_probe {} {
     disconnect
 }
 
+# Run the ARM test for separate ILA observation without reprogramming the PL.
+proc demo_trigger {} {
+    global demo_output
+    set elf [file join $demo_output test.elf]
+    if {![file isfile $elf]} {error "Missing ARM test ELF: $elf"}
+    set symbols [demo_nm $elf]
+    if {![regexp -line {^([0-9a-f]+) B result$} $symbols -> result_address]} {error "Missing result symbol"}
+    if {![regexp -line {^([0-9a-f]+) T test_finished$} $symbols -> finish_address]} {error "Missing test_finished symbol"}
+    connect -url tcp:127.0.0.1:3121
+    set targets_found [targets -target-properties -filter {name == "Cortex-A53 #0"}]
+    if {[llength $targets_found] == 0} {error "KV260 Cortex-A53 target not found"}
+    targets -set -filter {name == "Cortex-A53 #0"}
+    if {[catch {stop} message] && ![string match {*Already stopped*} $message]} {error $message}
+    dow $elf
+    set breakpoint [bpadd -addr 0x$finish_address]
+    con -block -timeout 30
+    set values [mrd -value 0x$result_address 8]
+    bpremove $breakpoint
+    if {[lindex $values 0] != 0x600D || [lindex $values 5] != 768 || [lindex $values 6] != 3} {
+        error "ARM NTT/INTT trigger test failed: $values"
+    }
+    puts "ARM_TRIGGER_TEST_PASS: 768 NTT coefficients; 3 INTT runs. Check ILA capture in Vivado separately."
+    disconnect
+}
+
+# Dispatch commands passed by demo.py.
 if {[llength $argv] < 1} {error "Missing action: artix, build, prepare, publish, sensor, arm-test or probe"}
 set action [lindex $argv 0]
 if {[catch {
@@ -343,12 +468,13 @@ if {[catch {
             if {[llength $argv] != 2} {error "artix requires an output directory"}
             demo_artix [lindex $argv 1]
         }
-        build - prepare - publish {demo_build $action}
+        build - prepare - publish - build-ila {demo_build $action}
         sensor {
             if {[llength $argv] != 3} {error "sensor requires ELF and capture directory"}
             demo_sensor [file normalize [lindex $argv 1]] [file normalize [lindex $argv 2]]
         }
         arm-test {demo_arm_test}
+        trigger {demo_trigger}
         probe {demo_probe}
         default {error "Unknown action: $action"}
     }

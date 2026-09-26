@@ -41,9 +41,9 @@ module ntt_mod_mul_12b (
     end
 
     assign t_16 = t_reg[15:0];
-    assign p1_m = (t_16 << 12) - (t_16 << 9);
-    assign p2_m = (t_16 << 8)  + t_16;
-    assign m_comb = p1_m - p2_m;
+    assign p1_m = (t_16 << 12) - (t_16 << 9); // t × 4096 - t × 512 = t × 3584
+    assign p2_m = (t_16 << 8)  + t_16;        // t × 256  + t × 1   = t × 257
+    assign m_comb = p1_m - p2_m;              // t × 3584 - t × 257 = t × 3327
 
     always @(posedge clk) begin
         m_reg <= m_comb;
@@ -51,9 +51,9 @@ module ntt_mod_mul_12b (
     end
 
     assign m_29 = {13'd0, m_reg};
-    assign p1_mq = (m_29 << 12) - (m_29 << 9);
-    assign p2_mq = (m_29 << 8)  - m_29;
-    assign mq_comb = p1_mq - p2_mq;
+    assign p1_mq = (m_29 << 12) - (m_29 << 9); // m × 4096 - m × 512 = m × 3584
+    assign p2_mq = (m_29 << 8)  - m_29;        // m × 256  - m × 1   = m × 255
+    assign mq_comb = p1_mq - p2_mq;            // m × 3584 - m × 255 = m × 3329
     assign t_plus_comb = {5'd0, t_reg_d1} + mq_comb;
 
     always @(posedge clk) begin

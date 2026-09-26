@@ -21,7 +21,6 @@ dfx_runtime.txt
 /Implementation/NTT.ioplanning/
 /Implementation/NTT.srcs/
 /Implementation/NTT.gen/
-/Implementation/NTT.xpr
 
 # Generated demo workspaces and artifacts. Demo source is tracked.
 /Demo/project/
