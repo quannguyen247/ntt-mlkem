@@ -1,7 +1,12 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module ntt_controller (
+module ntt_controller #(
+    // 1: INTT ends with the scale pass (default, standalone IP behaviour).
+    // 0: INTT ends after the last butterfly layer; the result is 128 times
+    //    the inverse transform and the user folds the factor in elsewhere.
+    parameter INTT_SCALE = 1
+)(
     input wire clk,
     input wire rst_n,
     input wire start,
@@ -64,7 +69,13 @@ module ntt_controller (
                                 end
                             end else begin
                                 if (len == 8'd128) begin
-                                    state <= ST_SCALE;
+                                    if (INTT_SCALE != 0) begin
+                                        state <= ST_SCALE;
+                                    end else begin
+                                        done <= 1'b1;
+                                        busy <= 1'b0;
+                                        state <= ST_IDLE;
+                                    end
                                 end else begin
                                     len <= len << 1;
                                 end

@@ -6,10 +6,14 @@ module ntt_ram_dual #(
     parameter ADDR_WIDTH = 8
 )(
     input wire clk,
+    // Write ports. bank_wr* is the bank of the address (its parity, ^addr_wr*),
+    // supplied by the caller so it can come from a register.
     input wire we0,
+    input wire bank_wr0,
     input wire [ADDR_WIDTH-1:0] addr_wr0,
     input wire [11:0] din0,
     input wire we1,
+    input wire bank_wr1,
     input wire [ADDR_WIDTH-1:0] addr_wr1,
     input wire [11:0] din1,
     input wire [ADDR_WIDTH-1:0] addr_rd0,
@@ -20,9 +24,6 @@ module ntt_ram_dual #(
 
     reg [11:0] bank0 [0:127];
     reg [11:0] bank1 [0:127];
-
-    wire bank_wr0 = ^addr_wr0;
-    wire bank_wr1 = ^addr_wr1;
 
     wire bank_rd0 = ^addr_rd0;
     wire bank_rd1 = ^addr_rd1;

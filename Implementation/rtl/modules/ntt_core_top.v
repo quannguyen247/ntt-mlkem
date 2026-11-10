@@ -1,7 +1,11 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module ntt_core_top (
+module ntt_core_top #(
+    // 1: INTT ends with the scale pass (default). 0: no scale pass, the INTT
+    // result is 128 times the inverse transform (256 cycles shorter).
+    parameter INTT_SCALE = 1
+)(
     input wire clk,
     input wire rst_n,
     input wire start,
@@ -64,16 +68,27 @@ module ntt_core_top (
 
     wire actual_done;
     wire actual_busy;
+    // Registered copy of the busy window (controller busy + pipeline drain):
+    // one flip-flop selects the RAM ports instead of a 10-input OR.
+    reg busy_reg;
 
     reg [7:0] afifo_a [0:AFIFO_DEPTH-1];
     reg [7:0] afifo_b [0:AFIFO_DEPTH-1];
     reg afifo_scale [0:AFIFO_DEPTH-1];
+    // Bank (address parity) of each write-back address, stored with it so the
+    // RAM write selects need no XOR tree behind the FIFO read.
+    reg afifo_bank_a [0:AFIFO_DEPTH-1];
+    reg afifo_bank_b [0:AFIFO_DEPTH-1];
     reg [3:0] afifo_wptr;
     reg [3:0] afifo_rptr;
 
     wire [7:0] wb_addr_a;
     wire [7:0] wb_addr_b;
     wire wb_scale;
+    wire wb_bank_a;
+    wire wb_bank_b;
+    wire ram_bank_wr0;
+    wire ram_bank_wr1;
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -105,8 +120,20 @@ module ntt_core_top (
         end
     end
 
+    // Busy from the accepted start until the last pipeline write has landed
+    // (equal to f_busy || f_done || |done_delay[7:0]).
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            busy_reg <= 1'b0;
+        end else if (controller_start) begin
+            busy_reg <= 1'b1;
+        end else if (done_delay[7]) begin
+            busy_reg <= 1'b0;
+        end
+    end
+
     assign actual_done = done_delay[8];
-    assign actual_busy = f_busy || f_done || |done_delay[7:0];
+    assign actual_busy = busy_reg;
     assign controller_start = start && !start_d && !actual_busy;
     assign advance_now = f_busy && !f_done;
     assign operation_mode = controller_start ? mode : mode_r;
@@ -118,7 +145,10 @@ module ntt_core_top (
     assign ram_addr_wr0 = actual_busy ? mem_wr_addr0 : ext_addr;
     assign ram_din0 = actual_busy ? mem_wr_data0 : ext_din;
 
+    assign ram_bank_wr0 = actual_busy ? wb_bank_a : ^ext_addr;
+
     assign ram_we1 = actual_busy ? mem_we1 : 1'b0;
+    assign ram_bank_wr1 = wb_bank_b;
     assign ram_addr_wr1 = actual_busy ? mem_wr_addr1 : 8'd0;
     assign ram_din1 = actual_busy ? mem_wr_data1 : 12'd0;
 
@@ -128,7 +158,9 @@ module ntt_core_top (
     assign ext_dout = mem_dout0;
     assign is_scale_now = (fstate == 2'd2);
 
-    ntt_controller u_controller (
+    ntt_controller #(
+        .INTT_SCALE(INTT_SCALE)
+    ) u_controller (
         .clk(clk),
         .rst_n(rst_n),
         .start(controller_start),
@@ -160,9 +192,11 @@ module ntt_core_top (
     ) u_mem (
         .clk(clk),
         .we0(ram_we0),
+        .bank_wr0(ram_bank_wr0),
         .addr_wr0(ram_addr_wr0),
         .din0(ram_din0),
         .we1(ram_we1),
+        .bank_wr1(ram_bank_wr1),
         .addr_wr1(ram_addr_wr1),
         .din1(ram_din1),
         .addr_rd0(ram_addr_rd0),
@@ -198,6 +232,8 @@ module ntt_core_top (
             afifo_a[afifo_wptr] <= addr_a;
             afifo_b[afifo_wptr] <= addr_b;
             afifo_scale[afifo_wptr] <= is_scale_d1;
+            afifo_bank_a[afifo_wptr] <= ^addr_a;
+            afifo_bank_b[afifo_wptr] <= ^addr_b;
             afifo_wptr <= afifo_wptr + 1;
         end
     end
@@ -205,6 +241,8 @@ module ntt_core_top (
     assign wb_addr_a = afifo_a[afifo_rptr];
     assign wb_addr_b = afifo_b[afifo_rptr];
     assign wb_scale = afifo_scale[afifo_rptr];
+    assign wb_bank_a = afifo_bank_a[afifo_rptr];
+    assign wb_bank_b = afifo_bank_b[afifo_rptr];
 
     always @(posedge clk) begin
         if (!rst_n) begin
