@@ -1,15 +1,23 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module ntt_mod_mul_12b (
+(* use_dsp = "no" *) module ntt_mod_mul_12b (
     input wire clk,
     input wire [11:0] a_i,
     input wire [11:0] b_i,
     output reg [11:0] r_o
 );
 
-    (* use_dsp = "no" *) wire [23:0] t_comb;
+    // Stage 1: operands. b (the twiddle) comes straight from a register, so
+    // its triple is formed here and the product needs no multiplier array.
     reg [11:0] a_reg, b_reg;
+    reg [13:0] b3_reg;
+
+    // Stage 2: radix-4 product, six partial products a[2j+1:2j] * b
+    wire [13:0] pp0, pp1, pp2, pp3, pp4, pp5;
+    wire [17:0] sum_lo;
+    wire [17:0] sum_hi;
+    wire [23:0] t_comb;
     reg [23:0] t_reg;
 
     wire [15:0] t_16;
@@ -30,13 +38,42 @@ module ntt_mod_mul_12b (
     wire [13:0] sub_val;
     wire [11:0] reduced_comb;
 
+    // Partial product digit * b for digit = 0..3
+    function [13:0] radix4_pp;
+        input [1:0] digit;
+        input [11:0] b;
+        input [13:0] b3;
+        begin
+            case (digit)
+                2'd0: radix4_pp = 14'd0;
+                2'd1: radix4_pp = {2'b00, b};
+                2'd2: radix4_pp = {1'b0, b, 1'b0};
+                default: radix4_pp = b3;
+            endcase
+        end
+    endfunction
+
     // Registered operands break the INTT subtract -> multiply path.
     // Five-cycle latency: operands, product, m, t+m*q, canonical result.
-    assign t_comb = a_reg * b_reg;
-
     always @(posedge clk) begin
         a_reg <= a_i;
         b_reg <= b_i;
+        b3_reg <= {2'b00, b_i} + {1'b0, b_i, 1'b0};
+    end
+
+    assign pp0 = radix4_pp(a_reg[1:0], b_reg, b3_reg);
+    assign pp1 = radix4_pp(a_reg[3:2], b_reg, b3_reg);
+    assign pp2 = radix4_pp(a_reg[5:4], b_reg, b3_reg);
+    assign pp3 = radix4_pp(a_reg[7:6], b_reg, b3_reg);
+    assign pp4 = radix4_pp(a_reg[9:8], b_reg, b3_reg);
+    assign pp5 = radix4_pp(a_reg[11:10], b_reg, b3_reg);
+
+    // Two three-input adders, then one two-input adder
+    assign sum_lo = {4'd0, pp0} + {2'd0, pp1, 2'd0} + {pp2, 4'd0};
+    assign sum_hi = {4'd0, pp3} + {2'd0, pp4, 2'd0} + {pp5, 4'd0};
+    assign t_comb = {6'd0, sum_lo} + {sum_hi, 6'd0};
+
+    always @(posedge clk) begin
         t_reg <= t_comb;
     end
 
