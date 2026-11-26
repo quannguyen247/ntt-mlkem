@@ -9,9 +9,7 @@ module ntt_twiddle_rom (
 
     `include "ntt_funcs.vh"
 
-    // Kept in LUTs. The address comes from a register, and without the
-    // attribute synthesis pulls that register and this table into a block RAM.
-    (* rom_style = "distributed" *) reg [`NTT_DATA_WIDTH-1:0] rom [0:255];
+    reg [`NTT_DATA_WIDTH-1:0] rom [0:255];
     integer i;
 
     initial begin
