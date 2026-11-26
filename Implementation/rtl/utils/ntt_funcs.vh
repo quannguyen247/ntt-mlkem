@@ -2,13 +2,12 @@
 function [`NTT_DATA_WIDTH-1:0] ntt_mod_add;
     input [`NTT_DATA_WIDTH-1:0] a;
     input [`NTT_DATA_WIDTH-1:0] b;
-    reg [`NTT_QWIDTH-1:0] sum;
+    reg [12:0] s;
+    reg [13:0] d;
     begin
-        sum = {1'b0, a} + {1'b0, b};
-        if (sum >= `NTT_Q)
-            ntt_mod_add = sum - `NTT_Q;
-        else
-            ntt_mod_add = sum[`NTT_DATA_WIDTH-1:0];
+        s = {1'b0, a} + {1'b0, b};
+        d = {1'b0, s} - 14'd3329;
+        ntt_mod_add = d[13] ? s[11:0] : d[11:0];
     end
 endfunction
 
@@ -16,80 +15,49 @@ endfunction
 function [`NTT_DATA_WIDTH-1:0] ntt_mod_sub;
     input [`NTT_DATA_WIDTH-1:0] a;
     input [`NTT_DATA_WIDTH-1:0] b;
-    reg [`NTT_QWIDTH-1:0] diff;
+    reg [12:0] d;
+    reg [11:0] s;
     begin
-        if (a >= b)
-            diff = {1'b0, a} - {1'b0, b};
-        else
-            diff = {1'b0, a} + `NTT_Q - {1'b0, b};
-        ntt_mod_sub = diff[`NTT_DATA_WIDTH-1:0];
+        d = {1'b0, a} - {1'b0, b};
+        s = d[11:0] + 12'd3329;
+        ntt_mod_sub = d[12] ? s : d[11:0];
     end
 endfunction
 
-// 12x12 multiplication using shift-add of partial products 
-function [23:0] ntt_mul_12x12;
-    input [11:0] a;
-    input [11:0] b;
-    reg [23:0] res;
-    integer i;
-    begin
-        res = 24'd0;
-        for (i = 0; i < 12; i = i + 1) begin
-            if (b[i])
-                res = res + ({12'd0, a} << i);
-        end
-        ntt_mul_12x12 = res;
-    end
-endfunction
-
-// Montgomery reduction without '*' by using shift-add expansions for constants
-// m = (t * QINV) & 0xFFFF  where QINV = 3327 = (1<<12) - (1<<9) - (1<<8) - 1
-// m_q = m * Q where Q = 3329 = (1<<12) - (1<<9) - (1<<8) + 1
-function [`NTT_DATA_WIDTH-1:0] ntt_montgomery_reduce;
-    input [23:0] t;
-    reg [47:0] t_ext;
-    reg [47:0] t_qinv;
-    reg [15:0] m;
-    reg [31:0] m_ext;
-    reg [31:0] m_q;
-    reg [31:0] t_plus;
-    reg [15:0] u;
-    begin
-        t_ext = {24'd0, t};
-        // t * QINV = (t<<12) - (t<<9) - (t<<8) - t
-        t_qinv = (t_ext << 12) - (t_ext << 9) - (t_ext << 8) - t_ext;
-        m = t_qinv[15:0];
-
-        m_ext = {16'd0, m};
-        // m * Q = (m<<12) - (m<<9) - (m<<8) + m
-        m_q = (m_ext << 12) - (m_ext << 9) - (m_ext << 8) + m_ext;
-
-        t_plus = {8'd0, t} + m_q; // align widths: t is 24b -> extend to 32b
-        u = t_plus >> `NTT_R_BITS;
-
-        if (u >= `NTT_Q)
-            ntt_montgomery_reduce = u - `NTT_Q;
-        else
-            ntt_montgomery_reduce = u[`NTT_DATA_WIDTH-1:0];
-    end
-endfunction
-
-// fqmul: multiply a (12-bit) by signed twiddle b, return reduced 12-bit result
-function [`NTT_DATA_WIDTH-1:0] ntt_fqmul;
+// Parallel CSA modular add: (a + b) mod q
+function [`NTT_DATA_WIDTH-1:0] ntt_mod_add_fast;
     input [`NTT_DATA_WIDTH-1:0] a;
-    input signed [15:0] b;
-    reg [15:0] b_u16;
-    reg [11:0] b_u;
-    reg [23:0] t;
+    input [`NTT_DATA_WIDTH-1:0] b;
+    reg [11:0] s;
+    reg [13:0] a14, b14, csa_s, csa_c, d;
     begin
-        b_u16 = b[15] ? (b + `NTT_Q) : b;
-        b_u = b_u16[`NTT_DATA_WIDTH-1:0];
-        t = ntt_mul_12x12(a, b_u);
-        ntt_fqmul = ntt_montgomery_reduce(t);
+        s = a + b;
+        a14 = {2'b00, a};
+        b14 = {2'b00, b};
+        csa_s = a14 ^ b14 ^ 14'h32FF;
+        csa_c = (a14 & b14) | ((a14 | b14) & 14'h32FF);
+        d = csa_s + {csa_c[12:0], 1'b0};
+        ntt_mod_add_fast = d[13] ? s : d[11:0];
     end
 endfunction
 
-// Twiddle lookup: packed {forward_16, inverse_16}
+// Parallel CSA modular sub: (a - b) mod q
+function [`NTT_DATA_WIDTH-1:0] ntt_mod_sub_fast;
+    input [`NTT_DATA_WIDTH-1:0] a;
+    input [`NTT_DATA_WIDTH-1:0] b;
+    reg [12:0] d;
+    reg [11:0] nb, csa_s, csa_c, s;
+    begin
+        d = {1'b0, a} - {1'b0, b};
+        nb = ~b;
+        csa_s = a ^ nb ^ 12'd3330;
+        csa_c = (a & nb) | ((a | nb) & 12'd3330);
+        s = csa_s + {csa_c[10:0], 1'b0};
+        ntt_mod_sub_fast = d[12] ? s : d[11:0];
+    end
+endfunction
+
+// Twiddle table: packed {forward_16, inverse_16}
 function signed [31:0] ntt_twiddle_entry;
     input [6:0] addr;
     reg signed [31:0] val;
@@ -229,21 +197,7 @@ function signed [31:0] ntt_twiddle_entry;
     end
 endfunction
 
-// Selector: returns 16-bit signed twiddle
-function signed [15:0] ntt_twiddle;
-    input [6:0] addr;
-    input is_inv;
-    reg signed [31:0] tmp;
-    begin
-        tmp = ntt_twiddle_entry(addr);
-        if (is_inv)
-            ntt_twiddle = tmp[15:0];
-        else
-            ntt_twiddle = tmp[31:16];
-    end
-endfunction
-
-// Unsigned twiddle (0..Q-1) with NTT_DATA_WIDTH bits
+// Unsigned twiddle in 0..q-1
 function [`NTT_DATA_WIDTH-1:0] ntt_twiddle_u;
     input [6:0] addr;
     input is_inv;
@@ -258,7 +212,6 @@ function [`NTT_DATA_WIDTH-1:0] ntt_twiddle_u;
         else
             tw16 = tmp[31:16];
 
-        // convert signed representation to unsigned modulo Q
         tw_u16 = tw16[15] ? (tw16 + `NTT_Q) : tw16;
         tw_u = tw_u16[`NTT_DATA_WIDTH-1:0];
         ntt_twiddle_u = tw_u;
