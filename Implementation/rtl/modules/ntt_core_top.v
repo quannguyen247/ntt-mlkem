@@ -1,274 +1,563 @@
 `timescale 1ns / 1ps
 `include "ntt_defs.vh"
 
-module ntt_core_top #(
-    // 1: INTT ends with the scale pass (default). 0: no scale pass, the INTT
-    // result is 128 times the inverse transform (256 cycles shorter).
-    parameter INTT_SCALE = 1
-)(
+module ntt_core_top (
     input wire clk,
     input wire rst_n,
+
+    // Pass-sequence control
     input wire start,
-    input wire mode,
+    input wire [1:0] op_mode,
+    input wire scale_kg,
+    input wire stream_out,
+
+    // Streaming BaseMul input
+    input wire bm_valid,
+    input wire bm_acc,
+    input wire [5:0] bm_m,
+    input wire bm_odd,
+    input wire [11:0] bm_a0,
+    input wire [11:0] bm_a1,
+    input wire [11:0] bm_b0,
+    input wire [11:0] bm_b1,
+    output wire bm_busy,
+
+    // Linear stream output
+    output reg stream_v,
+    output reg [5:0] stream_idx,
+    output reg [47:0] stream_data,
+
+    // External group port
     input wire ext_we,
-    input wire [7:0] ext_addr,
-    input wire [11:0] ext_din,
-    output wire [11:0] ext_dout,
+    input wire [5:0] ext_waddr,
+    input wire [47:0] ext_din,
+    input wire [5:0] ext_raddr,
+    output reg [47:0] ext_dout,
+
+    // Status
     output wire busy,
-    output wire done
+    output reg done
 );
 
-    localparam AFIFO_DEPTH = 16;
+    `include "ntt_funcs.vh"
 
-    wire [1:0] fstate;
-    wire f_busy;
-    wire f_done;
-    wire [7:0] len;
-    wire [7:0] pos;
-    wire [7:0] zidx;
-    wire [7:0] cnt;
-    wire is_scale_now;
-    wire controller_start;
-    wire advance_now;
-    wire operation_mode;
+    localparam integer BF_LAT = 8;
+    localparam integer WB_DLY_PRE = 2 * BF_LAT;
 
-    wire [7:0] addr_a;
-    wire [7:0] addr_b;
-    wire [11:0] zeta_d;
+    // Bank index of coefficient address
+    function [1:0] bank_of;
+        input [7:0] i;
+        begin
+            bank_of = i[1:0] + i[3:2] + i[5:4] + i[7:6];
+        end
+    endfunction
 
-    wire [11:0] bf_out0;
-    wire [11:0] bf_out1;
-    wire bf_valid_out;
-    reg bf_valid_in;
+    // Parallel CSA negated modular add: -(x + y) mod q
+    function [11:0] neg_mod_add;
+        input [11:0] x;
+        input [11:0] y;
+        reg [13:0] nx14, ny14, s1, c1, d1;
+        reg [11:0] nx12, ny12, s2, c2, d2;
+        begin
+            nx14 = {2'b11, ~x};
+            ny14 = {2'b11, ~y};
+            s1 = nx14 ^ ny14 ^ 14'd3331;
+            c1 = (nx14 & ny14) | ((nx14 | ny14) & 14'd3331);
+            d1 = s1 + {c1[12:0], 1'b0};
 
-    wire [11:0] mem_dout0;
-    wire [11:0] mem_dout1;
-    wire mem_we0;
-    wire mem_we1;
-    wire [7:0] mem_wr_addr0;
-    wire [7:0] mem_wr_addr1;
-    wire [11:0] mem_wr_data0;
-    wire [11:0] mem_wr_data1;
+            nx12 = ~x;
+            ny12 = ~y;
+            s2 = nx12 ^ ny12 ^ 12'd2564;
+            c2 = (nx12 & ny12) | ((nx12 | ny12) & 12'd2564);
+            d2 = s2 + {c2[10:0], 1'b0};
 
-    wire ram_we0;
-    wire ram_we1;
-    wire [7:0] ram_addr_wr0;
-    wire [7:0] ram_addr_wr1;
-    wire [7:0] ram_addr_rd0;
-    wire [7:0] ram_addr_rd1;
-    wire [11:0] ram_din0;
-    wire [11:0] ram_din1;
+            neg_mod_add = ((x == 12'd0) && (y == 12'd0)) ? 12'd0 : (d1[13] ? d2 : d1[11:0]);
+        end
+    endfunction
 
-    reg start_d;
-    reg mode_r;
-    reg [7:0] zidx_d1;
-    reg is_scale_d1;
-    // Drain the extra registered multiplier operand stage before releasing RAM.
-    reg [8:0] done_delay;
+    // Pass control
+    reg run;
+    reg [1:0] op_r;
+    reg scale_kg_r;
+    reg strm_r;
 
-    wire actual_done;
-    wire actual_busy;
-    // Registered copy of the busy window (controller busy + pipeline drain):
-    // one flip-flop selects the RAM ports instead of a 10-input OR.
-    reg busy_reg;
+    reg [2:0] pass;
+    reg [6:0] g;
+    reg [5:0] pend;
+    reg [5:0] bm_pend;
+    reg bm_busy_q;
+    wire issue = run && !g[6];
+    wire wb_v;
 
-    reg [7:0] afifo_a [0:AFIFO_DEPTH-1];
-    reg [7:0] afifo_b [0:AFIFO_DEPTH-1];
-    reg afifo_scale [0:AFIFO_DEPTH-1];
-    // Bank (address parity) of each write-back address, stored with it so the
-    // RAM write selects need no XOR tree behind the FIFO read.
-    reg afifo_bank_a [0:AFIFO_DEPTH-1];
-    reg afifo_bank_b [0:AFIFO_DEPTH-1];
-    reg [3:0] afifo_wptr;
-    reg [3:0] afifo_rptr;
+    wire [2:0] pass_last = (op_r == 2'd0) ? 3'd3 :
+                           (op_r == 2'd2) ? 3'd0 : 3'd4;
+    wire is_scl_p = (op_r == 2'd2) || ((op_r == 2'd3) && (pass == 3'd0));
+    wire is_intt_p = (op_r == 2'd1) || ((op_r == 2'd3) && (pass != 3'd0));
 
-    wire [7:0] wb_addr_a;
-    wire [7:0] wb_addr_b;
-    wire wb_scale;
-    wire wb_bank_a;
-    wire wb_bank_b;
-    wire ram_bank_wr0;
-    wire ram_bank_wr1;
+    reg [1:0] q;
+    reg single;
+    always @(*) begin
+        if (is_scl_p) begin
+            q = 2'd0;
+            single = 1'b0;
+        end else if (!is_intt_p) begin
+            q = 2'd3 - pass[1:0];
+            single = (pass == 3'd3);
+        end else begin
+            q = pass - 3'd1;
+            single = (pass == 3'd1);
+        end
+    end
 
+    wire is_strm_p = strm_r && (pass == pass_last) && (op_r == 2'd0 || op_r == 2'd2);
+    wire gap5 = is_intt_p ? (pass == 3'd3) : (!is_scl_p && (pass == 3'd0));
+    wire [6:0] g_last = gap5 ? 7'd66 : 7'd63;
+
+    assign busy = run;
+    assign bm_busy = bm_busy_q;
+
+    reg bm_wr_q;
+    wire [5:0] bm_pend_nx = bm_pend + {5'd0, bm_valid} - {5'd0, bm_wr_q};
     always @(posedge clk) begin
         if (!rst_n) begin
-            start_d <= 1'b0;
-            mode_r <= 1'b0;
+            run <= 1'b0;
+            op_r <= 2'd0;
+            scale_kg_r <= 1'b0;
+            strm_r <= 1'b0;
+            pass <= 3'd0;
+            g <= 7'd0;
+            pend <= 6'd0;
+            bm_pend <= 6'd0;
+            bm_busy_q <= 1'b0;
+            done <= 1'b0;
         end else begin
-            start_d <= start;
-            if (controller_start) begin
-                mode_r <= mode;
+            done <= 1'b0;
+            pend <= pend + {5'd0, issue} - {5'd0, run && wb_v};
+            bm_pend <= bm_pend_nx;
+            bm_busy_q <= (bm_pend_nx != 6'd0);
+            if (!run) begin
+                if (start) begin
+                    run <= 1'b1;
+                    op_r <= op_mode;
+                    scale_kg_r <= scale_kg;
+                    strm_r <= stream_out;
+                    pass <= (op_mode == 2'd1) ? 3'd1 : 3'd0;
+                    g <= 7'd0;
+                end
+            end else if (pass != pass_last) begin
+                if (g == g_last) begin
+                    pass <= pass + 3'd1;
+                    g <= 7'd0;
+                end else begin
+                    g <= g + 7'd1;
+                end
+            end else if (issue) begin
+                g <= g + 7'd1;
+            end else if (pend == 6'd0) begin
+                run <= 1'b0;
+                done <= 1'b1;
             end
         end
     end
 
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            zidx_d1 <= 8'd0;
-            is_scale_d1 <= 1'b0;
+    // Group address and twiddle index generation
+    reg [7:0] b_c;
+    reg [5:0] hb_c;
+    always @(*) begin
+        case (q)
+            2'd0: begin b_c = {g[5:0], 2'b00};        hb_c = g[5:0]; end
+            2'd1: begin b_c = {g[5:2], 2'b00, g[1:0]}; hb_c = {2'd0, g[5:2]}; end
+            2'd2: begin b_c = {g[5:4], 2'b00, g[3:0]}; hb_c = {4'd0, g[5:4]}; end
+            default: begin b_c = {2'b00, g[5:0]};      hb_c = 6'd0; end
+        endcase
+    end
+
+    reg [7:0] step_c;
+    always @(*) begin
+        case (q)
+            2'd0: step_c = 8'd1;
+            2'd1: step_c = 8'd4;
+            2'd2: step_c = 8'd16;
+            default: step_c = 8'd64;
+        endcase
+    end
+
+    reg [6:0] za_c, zb_c;
+    always @(*) begin
+        if (!is_intt_p) begin
+            za_c = (7'd64 >> (2 * q)) + {1'b0, hb_c};
+            zb_c = ((q == 2'd0) ? 7'd0 : (8'd128 >> (2 * q))) + {hb_c, 1'b0};
         end else begin
-            zidx_d1 <= zidx;
-            is_scale_d1 <= is_scale_now;
+            za_c = (8'd128 - (8'd128 >> (2 * q))) + {1'b0, hb_c};
+            zb_c = (8'd128 - (9'd256 >> (2 * q))) + {hb_c, 1'b0};
         end
     end
 
+    wire [1:0] r_c = bank_of(b_c);
+    reg [5:0] ra_c [0:3];
+    reg [1:0] el;
+    reg [7:0] ei;
+    integer t;
+    always @(*) begin
+        for (t = 0; t < 4; t = t + 1) begin
+            el = t[1:0] - r_c;
+            ei = b_c + el * step_c;
+            ra_c[t] = ei[7:2];
+        end
+    end
+
+    // Issue stage registers
+    reg v1;
+    reg [1:0] r1;
+    reg [5:0] ra1 [0:3];
+    reg [6:0] za1, zb1;
+    reg single1, scl1, intt1, strm1;
+    always @(posedge clk) begin
+        if (!rst_n)
+            v1 <= 1'b0;
+        else
+            v1 <= issue;
+        single1 <= single;
+        scl1 <= is_scl_p;
+        intt1 <= is_intt_p;
+        strm1 <= is_strm_p;
+        r1 <= r_c;
+        za1 <= za_c;
+        zb1 <= zb_c;
+        for (t = 0; t < 4; t = t + 1)
+            ra1[t] <= ra_c[t];
+    end
+
+    // Four-bank coefficient RAM
+    reg [5:0] bk_ra [0:3];
+    wire [11:0] bk_rd [0:3];
+    reg [3:0] bk_we;
+    reg [5:0] bk_wa [0:3];
+    reg [11:0] bk_wd [0:3];
+
+    genvar k;
+    generate
+        for (k = 0; k < 4; k = k + 1) begin : g_bank
+            reg [11:0] mem [0:63];
+            always @(posedge clk) begin
+                if (bk_we[k])
+                    mem[bk_wa[k]] <= bk_wd[k];
+            end
+            assign bk_rd[k] = mem[bk_ra[k]];
+        end
+    endgenerate
+
+    // Write-back metadata delay line
+    wire [28:0] wa_in = v1 ? {scl1, strm1, intt1, r1, ra1[3], ra1[2], ra1[1], ra1[0]}
+                           : {1'b0, bm_acc, bm_odd, bank_of({bm_m, 2'b00}), 18'd0, bm_m};
+    wire [28:0] wa_pre;
+    ntt_delay #(.W(29), .D(WB_DLY_PRE)) u_dwa (
+        .clk(clk),
+        .d(wa_in),
+        .q(wa_pre)
+    );
+    reg [28:0] wa_q;
+    always @(posedge clk)
+        wa_q <= wa_pre;
+
+    wire [5:0] bm_rd_m = wa_pre[5:0];
+    wire [1:0] bm_rd_r = wa_pre[25:24];
+    wire bm_rd_odd = wa_pre[26];
+
+    // Bank read address mux
+    wire [1:0] ext_rr = bank_of({ext_raddr, 2'b00});
+    always @(*) begin
+        for (t = 0; t < 4; t = t + 1)
+            bk_ra[t] = v1 ? ra1[t] : bm_busy_q ? bm_rd_m : ext_raddr;
+    end
+
+    // External and BaseMul accumulate read registers
+    reg [11:0] acc_rd0, acc_rd1;
+    wire [1:0] bm_rd_b0 = bm_rd_r + (bm_rd_odd ? 2'd2 : 2'd0);
+    wire [1:0] bm_rd_b1 = bm_rd_r + (bm_rd_odd ? 2'd3 : 2'd1);
+    always @(posedge clk) begin
+        for (t = 0; t < 4; t = t + 1)
+            ext_dout[12*t +: 12] <= bk_rd[(ext_rr + t) % 4];
+        acc_rd0 <= bk_rd[bm_rd_b0];
+        acc_rd1 <= bk_rd[bm_rd_b1];
+    end
+
+    // Operand and twiddle capture
+    reg v2;
+    reg single2, scl2, intt2, bm2;
+    reg [11:0] x2 [0:3];
+    reg [12:0] sa_raw_q, sb_raw_q;
+    wire [11:0] za_d, zb0_d, zb1_d;
+    reg [11:0] za2, zb02, zb12;
+
+    wire [11:0] scale_const = scale_kg_r ? 12'd1353 : 12'd1441;
+
+    wire [6:0] rom_a_addr = v1 ? za1 : {1'b1, bm_m};
+    wire rom_a_inv = v1 ? intt1 : 1'b0;
+    ntt_twiddle_rom u_rom_a (
+        .addr(rom_a_addr),
+        .is_inv(rom_a_inv),
+        .d_out(za_d)
+    );
+
+    reg [11:0] rom_b0 [0:63];
+    reg [11:0] rom_b1 [0:63];
+    integer ri;
+    initial begin
+        for (ri = 0; ri < 64; ri = ri + 1) begin
+            rom_b0[ri] = ntt_twiddle_u({ri[5], ri[4:0], 1'b0}, ri[5]);
+            rom_b1[ri] = ntt_twiddle_u({ri[5], ri[4:0], 1'b1}, ri[5]);
+        end
+    end
+    assign zb0_d = rom_b0[{intt1, zb1[5:1]}];
+    assign zb1_d = rom_b1[{intt1, zb1[5:1]}];
+
     always @(posedge clk) begin
         if (!rst_n) begin
-            done_delay <= 9'd0;
+            v2 <= 1'b0;
+            bm2 <= 1'b0;
         end else begin
-            done_delay <= {done_delay[7:0], f_done};
+            v2 <= v1 || bm_valid;
+            bm2 <= !v1 && bm_valid;
+        end
+        single2 <= v1 && single1;
+        scl2 <= v1 && scl1;
+        intt2 <= v1 && intt1;
+        sa_raw_q <= {1'b0, bm_a0} + {1'b0, bm_a1};
+        sb_raw_q <= {1'b0, bm_b0} + {1'b0, bm_b1};
+        if (v1) begin
+            for (t = 0; t < 4; t = t + 1)
+                x2[t] <= bk_rd[(r1 + t) % 4];
+            zb02 <= scl1 ? scale_const : zb0_d;
+            zb12 <= scl1 ? scale_const : zb1_d;
+            za2 <= scl1 ? scale_const : za_d;
+        end else begin
+            x2[2] <= bm_a1;
+            x2[3] <= bm_a0;
+            zb02 <= bm_b1;
+            zb12 <= bm_b0;
+            za2 <= za_d;
         end
     end
 
-    // Busy from the accepted start until the last pipeline write has landed
-    // (equal to f_busy || f_done || |done_delay[7:0]).
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            busy_reg <= 1'b0;
-        end else if (controller_start) begin
-            busy_reg <= 1'b1;
-        end else if (done_delay[7]) begin
-            busy_reg <= 1'b0;
-        end
-    end
+    // Karatsuba sum reduction
+    wire [13:0] sa_sub = {1'b0, sa_raw_q} - 14'd3329;
+    wire [13:0] sb_sub = {1'b0, sb_raw_q} - 14'd3329;
+    wire [11:0] sa_red = sa_sub[13] ? sa_raw_q[11:0] : sa_sub[11:0];
+    wire [11:0] sb_red = sb_sub[13] ? sb_raw_q[11:0] : sb_sub[11:0];
 
-    assign actual_done = done_delay[8];
-    assign actual_busy = busy_reg;
-    assign controller_start = start && !start_d && !actual_busy;
-    assign advance_now = f_busy && !f_done;
-    assign operation_mode = controller_start ? mode : mode_r;
+    // Butterfly stage 1
+    wire [3:0] ctrl_s1;
+    ntt_delay #(.W(4), .D(BF_LAT)) u_dsg1 (
+        .clk(clk),
+        .d({bm2, intt2, scl2, single2}),
+        .q(ctrl_s1)
+    );
+    wire single_s1 = ctrl_s1[0];
+    wire scl_s1 = ctrl_s1[1];
+    wire intt_s1 = ctrl_s1[2];
+    wire bm_s1 = ctrl_s1[3];
 
-    assign busy = actual_busy;
-    assign done = actual_done;
+    wire pair_b = intt2 || scl2;
+    wire [11:0] s1a_a = bm2 ? sa_red : x2[0];
+    wire [11:0] s1a_b = pair_b ? x2[1] : x2[2];
+    wire [11:0] s1b_a = bm2 ? sb_red : (pair_b ? x2[2] : x2[1]);
+    wire [11:0] s1b_b = x2[3];
+    wire [11:0] s1a_z = (intt2 || scl2 || bm2) ? zb02 : za2;
+    wire [11:0] s1b_z = (intt2 || scl2 || bm2) ? zb12 : za2;
+    wire s1_byp = intt2 && single2;
+    wire s1_bmp = scl2 || bm2;
 
-    assign ram_we0 = actual_busy ? mem_we0 : ext_we;
-    assign ram_addr_wr0 = actual_busy ? mem_wr_addr0 : ext_addr;
-    assign ram_din0 = actual_busy ? mem_wr_data0 : ext_din;
-
-    assign ram_bank_wr0 = actual_busy ? wb_bank_a : ^ext_addr;
-
-    assign ram_we1 = actual_busy ? mem_we1 : 1'b0;
-    assign ram_bank_wr1 = wb_bank_b;
-    assign ram_addr_wr1 = actual_busy ? mem_wr_addr1 : 8'd0;
-    assign ram_din1 = actual_busy ? mem_wr_data1 : 12'd0;
-
-    assign ram_addr_rd0 = actual_busy ? addr_a : ext_addr;
-    assign ram_addr_rd1 = actual_busy ? addr_b : 8'd0;
-
-    assign ext_dout = mem_dout0;
-    assign is_scale_now = (fstate == 2'd2);
-
-    ntt_controller #(
-        .INTT_SCALE(INTT_SCALE)
-    ) u_controller (
+    wire s1a_v, s1b_v_unused;
+    wire [11:0] s1a_o0, s1a_o1, s1b_o0, s1b_o1;
+    ntt_butterfly #(.BYPASS_MODE(1)) u_bf1a (
         .clk(clk),
         .rst_n(rst_n),
-        .start(controller_start),
-        .mode(operation_mode),
-        .advance(advance_now),
-        .state(fstate),
-        .busy(f_busy),
-        .done(f_done),
-        .len(len),
-        .pos(pos),
-        .zidx(zidx),
-        .cnt(cnt)
+        .mode(intt2),
+        .is_scale(s1_byp),
+        .bm_pass(s1_bmp),
+        .a_i(s1a_a),
+        .b_i(s1a_b),
+        .zeta_i(s1a_z),
+        .valid_i(v2),
+        .valid_o(s1a_v),
+        .out0(s1a_o0),
+        .out1(s1a_o1)
     );
-
-    ntt_agu u_agu (
+    ntt_butterfly #(.BYPASS_MODE(1)) u_bf1b (
         .clk(clk),
         .rst_n(rst_n),
-        .start(f_busy),
-        .len(len),
-        .pos(pos),
-        .block_idx(zidx),
-        .addr_a(addr_a),
-        .addr_b(addr_b)
+        .mode(intt2),
+        .is_scale(s1_byp),
+        .bm_pass(s1_bmp),
+        .a_i(s1b_a),
+        .b_i(s1b_b),
+        .zeta_i(s1b_z),
+        .valid_i(v2),
+        .valid_o(s1b_v_unused),
+        .out0(s1b_o0),
+        .out1(s1b_o1)
     );
 
-    ntt_ram_dual #(
-        .DEPTH(256),
-        .ADDR_WIDTH(8)
-    ) u_mem (
+    wire [11:0] y [0:3];
+    assign y[0] = s1a_o0;
+    assign y[1] = intt_s1 ? s1a_o1 : s1b_o0;
+    assign y[2] = intt_s1 ? s1b_o0 : s1a_o1;
+    assign y[3] = s1b_o1;
+
+    // Stage 2 twiddle delay
+    wire [23:0] z_dly;
+    ntt_delay #(.W(24), .D(BF_LAT)) u_dz (
         .clk(clk),
-        .we0(ram_we0),
-        .bank_wr0(ram_bank_wr0),
-        .addr_wr0(ram_addr_wr0),
-        .din0(ram_din0),
-        .we1(ram_we1),
-        .bank_wr1(ram_bank_wr1),
-        .addr_wr1(ram_addr_wr1),
-        .din1(ram_din1),
-        .addr_rd0(ram_addr_rd0),
-        .addr_rd1(ram_addr_rd1),
-        .dout0(mem_dout0),
-        .dout1(mem_dout1)
+        .d({(intt2 || scl2 || bm2) ? za2 : zb12, (intt2 || scl2 || bm2) ? za2 : zb02}),
+        .q(z_dly)
     );
+    wire [11:0] s2a_z = z_dly[11:0];
+    wire [11:0] s2b_z = bm_s1 ? s1b_o0 : z_dly[23:12];
 
-    ntt_twiddle_rom u_rom (
-        .addr(zidx_d1[6:0]),
-        .is_inv(operation_mode),
-        .d_out(zeta_d)
-    );
+    // Butterfly stage 2
+    wire [11:0] neg_p00_p11 = neg_mod_add(s1b_o1, s1a_o1);
 
-    ntt_butterfly u_bf (
+    wire [11:0] s2a_a = bm_s1 ? s1b_o1 : (scl_s1 ? s1a_o1 : y[0]);
+    wire [11:0] s2a_b = bm_s1 ? s1a_o1 : (scl_s1 ? s1a_o0 : (intt_s1 ? y[2] : y[1]));
+    wire [11:0] s2b_a = bm_s1 ? neg_p00_p11 : (scl_s1 ? s1b_o1 : (intt_s1 ? y[1] : y[2]));
+    wire [11:0] s2b_b = bm_s1 ? s1a_o0 : (scl_s1 ? s1b_o0 : y[3]);
+    wire s2_byp = !intt_s1 && !scl_s1 && !bm_s1 && single_s1;
+    wire s2_bmp = scl_s1;
+
+    wire s2a_v, s2b_v_unused;
+    wire [11:0] s2a_o0, s2a_o1, s2b_o0, s2b_o1;
+    ntt_butterfly #(.BYPASS_MODE(1), .FAST_OUT(1)) u_bf2a (
         .clk(clk),
         .rst_n(rst_n),
-        .mode(operation_mode),
-        .is_scale(is_scale_d1),
-        .a_i(mem_dout0),
-        .b_i(mem_dout1),
-        .zeta_i(zeta_d),
-        .valid_i(bf_valid_in),
-        .valid_o(bf_valid_out),
-        .out0(bf_out0),
-        .out1(bf_out1)
+        .mode(intt_s1),
+        .is_scale(s2_byp),
+        .bm_pass(s2_bmp),
+        .a_i(s2a_a),
+        .b_i(s2a_b),
+        .zeta_i(s2a_z),
+        .valid_i(s1a_v),
+        .valid_o(s2a_v),
+        .out0(s2a_o0),
+        .out1(s2a_o1)
+    );
+    ntt_butterfly #(.BYPASS_MODE(1), .FAST_OUT(1)) u_bf2b (
+        .clk(clk),
+        .rst_n(rst_n),
+        .mode(intt_s1),
+        .is_scale(s2_byp),
+        .bm_pass(s2_bmp),
+        .a_i(s2b_a),
+        .b_i(s2b_b),
+        .zeta_i(s2b_z),
+        .valid_i(s1a_v),
+        .valid_o(s2b_v_unused),
+        .out0(s2b_o0),
+        .out1(s2b_o1)
     );
 
+    assign wb_v = s2a_v;
+
+    // Write-back and linear stream output
+    wire [1:0] r_wb = wa_q[25:24];
+    wire intt_wb = wa_q[26];
+    wire strm_wb = wa_q[27];
+    wire scl_wb = wa_q[28];
+
+    wire [11:0] w [0:3];
+    assign w[0] = scl_wb ? s2a_o1 : s2a_o0;
+    assign w[1] = scl_wb ? s2a_o0 : (intt_wb ? s2b_o0 : s2a_o1);
+    assign w[2] = scl_wb ? s2b_o1 : (intt_wb ? s2a_o1 : s2b_o0);
+    assign w[3] = scl_wb ? s2b_o0 : s2b_o1;
+
+    // BaseMul accumulate pipeline stage
+    wire bm_wb_odd = wa_q[26];
+    wire bm_wb_acc = wa_q[27];
+    wire [5:0] bm_wb_m = wa_q[5:0];
+    wire [11:0] bm_c0 = bm_wb_odd ? s2a_o1 : s2a_o0;
+    wire [11:0] bm_c1 = s2b_o0;
+    wire [11:0] acc0_sum = bm_wb_acc ? ntt_mod_add(acc_rd0, bm_c0) : bm_c0;
+    wire [11:0] acc1_sum = bm_wb_acc ? ntt_mod_add(acc_rd1, bm_c1) : bm_c1;
+
+    reg bm_wb_v_q;
+    reg [5:0] bm_wb_m_q;
+    reg [1:0] bm_wb_r_q, bm_wb_b0_q, bm_wb_b1_q;
+    reg [11:0] acc0_q, acc1_q;
     always @(posedge clk) begin
-        if (!rst_n) begin
-            afifo_wptr <= 0;
-        end else if (bf_valid_in) begin
-            afifo_a[afifo_wptr] <= addr_a;
-            afifo_b[afifo_wptr] <= addr_b;
-            afifo_scale[afifo_wptr] <= is_scale_d1;
-            afifo_bank_a[afifo_wptr] <= ^addr_a;
-            afifo_bank_b[afifo_wptr] <= ^addr_b;
-            afifo_wptr <= afifo_wptr + 1;
-        end
+        if (!rst_n)
+            bm_wb_v_q <= 1'b0;
+        else
+            bm_wb_v_q <= !run && wb_v;
+        bm_wb_m_q <= bm_wb_m;
+        bm_wb_r_q <= r_wb;
+        bm_wb_b0_q <= r_wb + (bm_wb_odd ? 2'd2 : 2'd0);
+        bm_wb_b1_q <= r_wb + (bm_wb_odd ? 2'd3 : 2'd1);
+        acc0_q <= acc0_sum;
+        acc1_q <= acc1_sum;
     end
 
-    assign wb_addr_a = afifo_a[afifo_rptr];
-    assign wb_addr_b = afifo_b[afifo_rptr];
-    assign wb_scale = afifo_scale[afifo_rptr];
-    assign wb_bank_a = afifo_bank_a[afifo_rptr];
-    assign wb_bank_b = afifo_bank_b[afifo_rptr];
-
+    // Bank write mux and stream output registers
+    wire [1:0] ext_wr = bank_of({ext_waddr, 2'b00});
     always @(posedge clk) begin
         if (!rst_n) begin
-            afifo_rptr <= 0;
-        end else if (bf_valid_out) begin
-            afifo_rptr <= afifo_rptr + 1;
-        end
-    end
-
-    assign mem_we0 = bf_valid_out;
-    assign mem_wr_addr0 = wb_addr_a;
-    assign mem_wr_data0 = bf_out0;
-
-    assign mem_we1 = bf_valid_out && !wb_scale;
-    assign mem_wr_addr1 = wb_addr_b;
-    assign mem_wr_data1 = bf_out1;
-
-    always @(posedge clk) begin
-        if (!rst_n) begin
-            bf_valid_in <= 1'b0;
+            bk_we <= 4'd0;
+            bm_wr_q <= 1'b0;
+            stream_v <= 1'b0;
         end else begin
-            bf_valid_in <= 1'b0;
-            if (f_busy && !f_done) begin
-                bf_valid_in <= 1'b1;
+            bm_wr_q <= bm_wb_v_q;
+            stream_v <= run && wb_v && strm_wb;
+            if (run) begin
+                bk_we <= {4{wb_v}};
+            end else if (bm_wb_v_q) begin
+                for (t = 0; t < 4; t = t + 1)
+                    bk_we[t] <= (t[1:0] == bm_wb_b0_q) || (t[1:0] == bm_wb_b1_q);
+            end else begin
+                bk_we <= {4{ext_we}};
+            end
+        end
+
+        stream_idx <= wa_q[5:0];
+        stream_data <= {w[3], w[2], w[1], w[0]};
+
+        for (t = 0; t < 4; t = t + 1) begin
+            if (run) begin
+                bk_wa[t] <= wa_q[6*t +: 6];
+                bk_wd[t] <= strm_wb ? 12'd0 : w[(t + 4 - r_wb) % 4];
+            end else if (bm_wb_v_q) begin
+                bk_wa[t] <= bm_wb_m_q;
+                bk_wd[t] <= (t[0] == bm_wb_r_q[0]) ? acc0_q : acc1_q;
+            end else begin
+                bk_wa[t] <= ext_waddr;
+                bk_wd[t] <= ext_din[12*((t + 4 - ext_wr) % 4) +: 12];
             end
         end
     end
+
+endmodule
+
+
+module ntt_delay #(
+    parameter W = 1,
+    parameter D = 1
+)(
+    input wire clk,
+    input wire [W-1:0] d,
+    output wire [W-1:0] q
+);
+
+    generate
+        if (D == 0) begin : g_wire
+            assign q = d;
+        end else begin : g_regs
+            reg [W-1:0] sr [0:D-1];
+            integer i;
+            always @(posedge clk) begin
+                sr[0] <= d;
+                for (i = 1; i < D; i = i + 1)
+                    sr[i] <= sr[i-1];
+            end
+            assign q = sr[D-1];
+        end
+    endgenerate
 
 endmodule
